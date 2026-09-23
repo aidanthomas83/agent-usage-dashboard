@@ -1,28 +1,34 @@
 @echo off
 setlocal
 
-rem Supports both:
+rem Supports:
+rem   run-usage-report.cmd
 rem   run-usage-report.cmd 90
 rem   run-usage-report.cmd --days 90
-rem Additional collector flags such as --scan-all are passed through.
+rem Additional collector flags such as --scan-all, --codex-home and --output-dir
+rem are passed through unchanged.
 
 if "%~1"=="" (
-  set "ARGS=--days 7"
+  py "%~dp0collect_codex_usage.py" --days 7
+) else if /I "%~1"=="--days" (
+  py "%~dp0collect_codex_usage.py" %*
+) else if /I "%~1"=="--help" (
+  py "%~dp0collect_codex_usage.py" %*
+) else if /I "%~1"=="-h" (
+  py "%~dp0collect_codex_usage.py" %*
 ) else (
-  set "FIRST=%~1"
-  if "%FIRST:~0,1%"=="-" (
-    set "ARGS=%*"
-  ) else (
-    set "ARGS=--days %*"
-  )
+  py "%~dp0collect_codex_usage.py" --days %*
 )
 
-py "%~dp0collect_codex_usage.py" %ARGS%
-if errorlevel 1 (
+set "RESULT=%ERRORLEVEL%"
+if not "%RESULT%"=="0" (
   echo.
-  echo Codex usage collection failed.
-  exit /b %errorlevel%
+  echo Codex usage collection failed with exit code %RESULT%.
+  exit /b %RESULT%
 )
 
-start "" "%~dp0dashboard\index.html"
+if not "%CODEX_USAGE_NO_OPEN%"=="1" (
+  start "" "%~dp0dashboard\index.html"
+)
+
 endlocal
