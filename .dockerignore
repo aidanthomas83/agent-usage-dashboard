@@ -1,0 +1,15 @@
+.git
+.github
+data
+preview-data
+test-output
+__pycache__
+*.pyc
+*.pyo
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+.env
+.env.*
+*.bak*
