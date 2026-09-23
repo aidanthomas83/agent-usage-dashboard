@@ -109,7 +109,8 @@ RECORD_FIELDS = [
     "is_compaction", "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "fresh_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens",
     "cache_hit_pct", "estimated_credits", "credit_rate_status",
-    "api_equivalent_cost_usd", "api_cost_rate_status", "api_long_context", "source_rollout",
+    "api_equivalent_cost_usd", "api_cost_rate_status", "api_long_context",
+    "usage_source", "source_rollout",
 ]
 RECORD_INT_FIELDS = {
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens", "fresh_input_tokens",
@@ -819,9 +820,25 @@ def parse_rollout(
                 continue
 
     # Build per-response token records after turn/model context is known.
+    #
+    # Newer Codex builds persist authoritative per-response token_usage_record
+    # events. Older builds persist cumulative token_count snapshots instead.
+    # For the latter, derive each request from the increase in total_token_usage;
+    # this avoids double-counting repeated last_token_usage values on
+    # rate-limit-only updates.
     records: list[dict[str, Any]] = []
     active_turn_id = ""
     current_ctx = {"model": "", "effort": "", "service_tier": ""}
+    direct_usage_times = [
+        parse_iso(i.get("timestamp"))
+        for i in items
+        if i.get("type") == "token_usage_record" and isinstance(i.get("payload"), dict)
+    ]
+    direct_usage_times = [dt for dt in direct_usage_times if dt is not None]
+    first_direct_usage_utc = min(direct_usage_times) if direct_usage_times else None
+    previous_cumulative: dict[str, int] | None = None
+    legacy_usage_ordinal = 0
+
     for item in items:
         typ = item.get("type")
         payload = item.get("payload") or {}
@@ -837,6 +854,86 @@ def parse_rollout(
                 current_ctx.update(turn_context[active_turn_id])
         elif typ == "event_msg" and str(payload.get("type") or "") in {"task_started", "turn_started"}:
             active_turn_id = str(payload.get("turn_id") or active_turn_id)
+        elif typ == "event_msg" and str(payload.get("type") or "") == "token_count":
+            info = payload.get("info") or {}
+            total_usage = info.get("total_token_usage") if isinstance(info, dict) else None
+            if not isinstance(total_usage, dict):
+                continue
+
+            current_cumulative = {
+                "input_tokens": to_int(total_usage.get("input_tokens")),
+                "cached_input_tokens": to_int(total_usage.get("cached_input_tokens")),
+                "cache_write_input_tokens": to_int(total_usage.get("cache_write_input_tokens", total_usage.get("cache_creation_input_tokens", 0))),
+                "output_tokens": to_int(total_usage.get("output_tokens")),
+                "reasoning_output_tokens": to_int(total_usage.get("reasoning_output_tokens")),
+                "total_tokens": to_int(total_usage.get("total_tokens")),
+            }
+
+            # Always advance the cumulative baseline, including events outside
+            # the selected window. That makes the first in-range delta correct.
+            if previous_cumulative is None:
+                delta = dict(current_cumulative)
+            else:
+                delta = {
+                    k: max(0, current_cumulative[k] - previous_cumulative.get(k, 0))
+                    for k in current_cumulative
+                }
+            cumulative_advanced = any(current_cumulative[k] > (previous_cumulative or {}).get(k, 0) for k in current_cumulative)
+            previous_cumulative = current_cumulative
+
+            ts_utc = parse_iso(item.get("timestamp"))
+            # Once a rollout starts emitting direct per-response telemetry,
+            # prefer it and stop materialising cumulative token_count deltas.
+            if not ts_utc or (first_direct_usage_utc is not None and ts_utc >= first_direct_usage_utc):
+                continue
+            if not cumulative_advanced or delta["total_tokens"] <= 0:
+                continue
+
+            ts_local = ts_utc.astimezone(local_tz)
+            date_key = ts_local.date().isoformat()
+            if date_key not in selected_dates:
+                continue
+
+            tid = str(payload.get("turn_id") or active_turn_id)
+            ctx = turn_context.get(tid, current_ctx)
+            thread_id = thread_id_default
+            session_id = session_id_default or thread_id
+            if not thread_id:
+                continue
+
+            inp = delta["input_tokens"]
+            cached = delta["cached_input_tokens"]
+            cache_write = delta["cache_write_input_tokens"]
+            out = delta["output_tokens"]
+            reasoning = delta["reasoning_output_tokens"]
+            total = delta["total_tokens"] or inp + out
+            fresh = max(0, inp - cached)
+            credits, rate_status = estimate_credits(ctx.get("model", ""), fresh, cached, out, ctx.get("service_tier", ""))
+            api_cost, api_status, api_long = estimate_api_cost(ctx.get("model", ""), inp, cached, cache_write, out)
+            legacy_usage_ordinal += 1
+            response_id = f"legacy-token-count:{legacy_usage_ordinal}:{iso_utc(ts_utc)}"
+
+            records.append({
+                "date": date_key, "timestamp_utc": iso_utc(ts_utc), "timestamp_local": ts_local.isoformat(),
+                "session_id": session_id, "session_name": thread_names.get(session_id, "") or session_name_default,
+                "thread_id": thread_id, "thread_name": thread_names.get(thread_id, "") or thread_name_default,
+                "thread_start_utc": iso_utc(thread_start_utc), "thread_start_local": thread_start_utc.astimezone(local_tz).isoformat() if thread_start_utc else "",
+                "thread_latest_utc": iso_utc(thread_latest_utc), "thread_latest_local": thread_latest_utc.astimezone(local_tz).isoformat() if thread_latest_utc else "",
+                "parent_thread_id": meta.get("parent_thread_id", ""), "thread_source": meta.get("thread_source", ""),
+                "session_source": meta.get("session_source", ""), "originator": meta.get("originator", ""), "cli_version": meta.get("cli_version", ""),
+                "agent_type": agent_type, "agent_role": meta.get("agent_role", ""), "agent_nickname": meta.get("agent_nickname", ""), "agent_label": agent_label,
+                "project": meta.get("project", ""), "model": ctx.get("model", ""), "reasoning_effort": ctx.get("effort", ""), "service_tier": ctx.get("service_tier", ""),
+                "turn_id": tid, "root_turn_id": "", "response_id": response_id,
+                "is_compaction": "false",
+                "input_tokens": inp, "cached_input_tokens": cached, "cache_write_input_tokens": cache_write, "fresh_input_tokens": fresh,
+                "output_tokens": out, "reasoning_output_tokens": reasoning, "total_tokens": total,
+                "cache_hit_pct": round((cached / inp * 100.0) if inp else 0.0, 4),
+                "estimated_credits": round(credits, 6), "credit_rate_status": rate_status,
+                "api_equivalent_cost_usd": round(api_cost, 6), "api_cost_rate_status": api_status,
+                "api_long_context": "true" if api_long else "false",
+                "usage_source": "token_count_delta", "source_rollout": rel,
+            })
+
         elif typ == "token_usage_record":
             usage = payload.get("usage") or {}
             if not isinstance(usage, dict):
@@ -881,7 +978,8 @@ def parse_rollout(
                 "cache_hit_pct": round((cached / inp * 100.0) if inp else 0.0, 4),
                 "estimated_credits": round(credits, 6), "credit_rate_status": rate_status,
                 "api_equivalent_cost_usd": round(api_cost, 6), "api_cost_rate_status": api_status,
-                "api_long_context": "true" if api_long else "false", "source_rollout": rel,
+                "api_long_context": "true" if api_long else "false",
+                "usage_source": "token_usage_record", "source_rollout": rel,
             })
 
     # Materialize turn rows, including turns without token usage.
@@ -1015,6 +1113,8 @@ def upgrade_record(row: dict[str, Any]) -> dict[str, Any]:
     row["api_equivalent_cost_usd"] = round(api_cost, 6)
     row["api_cost_rate_status"] = api_status
     row["api_long_context"] = "true" if api_long else "false"
+    if not str(row.get("usage_source") or ""):
+        row["usage_source"] = "token_usage_record"
     return row
 
 
@@ -1188,13 +1288,22 @@ def main() -> int:
         "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
         "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
         "api_cost_note":"Counterfactual Standard OpenAI API token cost at today's rates. Includes cached-input and cache-write pricing plus documented >272K long-context multipliers. Excludes separate tool-call, web-search, container, storage, regional-processing, and other non-token API charges.",
-        "accounting_note":"Per-response token_usage_record rows deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+        "usage_source_counts":dict(sorted({src:sum(1 for r in records if str(r.get("usage_source") or "")==src) for src in {str(r.get("usage_source") or "") for r in records if r.get("usage_source")}}.items())),
     }
     write_dashboard_data(data_path,records,turns,activities,limits,metadata,agents)
     with metadata_path.open("w",encoding="utf-8") as f: json.dump(metadata,f,indent=2); f.write("\n")
 
     ds=sorted(selected)
-    print(f"Processed {args.days} day(s): {ds[0]} through {ds[-1]}")
+    print(f"Requested window: {args.days} day(s), {ds[0]} through {ds[-1]}")
+    observed_dates=sorted({str(r.get("date") or "") for r in records if r.get("date")})
+    if observed_dates:
+        print(f"Observed token data: {observed_dates[0]} through {observed_dates[-1]} ({len(observed_dates)} day(s) with usage)")
+    else:
+        print("Observed token data: none")
+    source_counts=metadata.get("usage_source_counts") or {}
+    if source_counts:
+        print("Usage sources: " + ", ".join(f"{k}={v:,}" for k,v in source_counts.items()))
     print(f"Scanned {len(rollouts)} rollout file(s); {files_with_usage} contained selected activity")
     print(f"Rebuilt {len(dedupe_records(rebuilt_records)):,} response record(s), {len(dedupe_turns(rebuilt_turns)):,} turn(s), {len(dedupe_activity(rebuilt_activity)):,} activity record(s)")
     print(f"Dataset: {len(records):,} responses | {len(turns):,} turns | {len(activities):,} activities")
