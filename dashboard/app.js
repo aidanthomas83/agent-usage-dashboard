@@ -401,9 +401,19 @@ async function refreshLatestPricing(){
 function openRefreshModal(){
   $('refreshModal').classList.add('show');$('refreshModalStatus').hidden=true;
   $('refreshDays').value=activeQuickRange||7;$('refreshFrom').value=filters().from||meta?.data_min||'';$('refreshTo').value=filters().to||meta?.data_max||'';
+  setRefreshMode(refreshMode);
 }
 function closeRefreshModal(){$('refreshModal').classList.remove('show');}
-function setRefreshMode(mode){refreshMode=mode;document.querySelectorAll('.mode-btn').forEach(btn=>btn.classList.toggle('active',btn.dataset.refreshMode===mode));$('refreshDaysPanel').hidden=mode!=='days';$('refreshRangePanel').hidden=mode!=='range';}
+function setRefreshMode(mode){
+  refreshMode=mode==='range'?'range':'days';
+  document.querySelectorAll('.mode-btn').forEach(btn=>{
+    const active=btn.dataset.refreshMode===refreshMode;
+    btn.classList.toggle('active',active);
+    btn.setAttribute('aria-selected',active?'true':'false');
+  });
+  $('refreshDaysPanel').hidden=refreshMode!=='days';
+  $('refreshRangePanel').hidden=refreshMode!=='range';
+}
 async function startRefresh(){
   const body={mode:refreshMode,scan_all:$('refreshScanAll').checked};
   if(refreshMode==='range'){body.from=$('refreshFrom').value;body.to=$('refreshTo').value;}else body.days=Number($('refreshDays').value||7);
