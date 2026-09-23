@@ -7,7 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DASHBOARD_PORT=8765 \\
     TZ=Australia/Brisbane
 
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \\
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
