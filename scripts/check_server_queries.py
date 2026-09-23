@@ -59,6 +59,8 @@ def main() -> int:
             "model": "gpt-6-sol",
             "reasoning_effort": "medium",
             "status": "completed",
+            "started_utc": "2026-09-23T00:00:00Z",
+            "completed_utc": "2026-09-23T00:00:05Z",
             "duration_ms": 5000,
             "time_to_first_token_ms": 400,
             "context_utilization_pct": 20.0,
@@ -140,6 +142,16 @@ def main() -> int:
         assert subscription["ready"] and subscription["summary"]["api_cost"] > 0, subscription
         assert insights["skill_summary"]["skill_invocations"] == 1, insights
         assert activity["skill_invocations"] == 1 and activity["distinct_skills"] == 1, activity
+        runtime = activity["runtime_summary"]
+        assert runtime["agent_compute_ms"] == 5000, runtime
+        assert runtime["active_wall_ms"] == 5000, runtime
+        assert runtime["duration_coverage_pct"] == 100.0, runtime
+        assert runtime["interval_coverage_pct"] == 100.0, runtime
+        assert runtime["cost_per_agent_hour"] > 0, runtime
+        assert server.merged_interval_ms([
+            {"started_utc": "2026-09-23T00:00:00Z", "completed_utc": "2026-09-23T00:00:10Z"},
+            {"started_utc": "2026-09-23T00:00:05Z", "completed_utc": "2026-09-23T00:00:15Z"},
+        ]) == 15000
         statuses = {row["name"]: row["status"] for row in activity["configured_skills"]}
         assert statuses["coding-standards"] == "used_selected", statuses
         assert statuses["unused-skill"] == "never_seen", statuses
