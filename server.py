@@ -195,6 +195,41 @@ def rows_as_dicts(rows) -> list[dict[str, object]]:
     return [dict(row) for row in rows]
 
 
+def parse_iso_timestamp(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def merged_interval_ms(rows) -> int:
+    """Return union duration for timestamp pairs, so overlapping agents count once."""
+    intervals: list[tuple[datetime, datetime]] = []
+    for row in rows:
+        start = parse_iso_timestamp(row["started_utc"])
+        end = parse_iso_timestamp(row["completed_utc"])
+        if start is None or end is None or end <= start:
+            continue
+        intervals.append((start, end))
+    if not intervals:
+        return 0
+    intervals.sort(key=lambda pair: pair[0])
+    total = 0.0
+    current_start, current_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start <= current_end:
+            if end > current_end:
+                current_end = end
+            continue
+        total += (current_end - current_start).total_seconds() * 1000.0
+        current_start, current_end = start, end
+    total += (current_end - current_start).total_seconds() * 1000.0
+    return int(round(total))
+
+
 def percentile(conn: sqlite3.Connection, table: str, field: str, where: str, values: list[object], p: float) -> float:
     condition = f'"{field}">0'
     count_sql = f'SELECT COUNT(*) FROM "{table}"{where} {"AND" if where else "WHERE"} {condition}'
@@ -696,6 +731,8 @@ def insights_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
 
 
 def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
+    pricing = load_pricing(data_dir)
+
     def build():
         conn = open_db(data_dir)
         if conn is None:
@@ -716,6 +753,98 @@ def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                      GROUP BY date,model ORDER BY date,model""",
                 turn_values,
             ).fetchall())
+
+            runtime_by_agent = rows_as_dicts(conn.execute(
+                f"""SELECT date,{agent_expr()} name,
+                           COUNT(*) turns,
+                           COALESCE(SUM(duration_ms),0) duration_ms,
+                           SUM(CASE WHEN duration_ms>0 THEN 1 ELSE 0 END) duration_covered_turns,
+                           SUM(CASE WHEN started_utc<>'' AND completed_utc<>'' THEN 1 ELSE 0 END) interval_covered_turns
+                      FROM turns{turn_where}
+                     GROUP BY date,{agent_expr()}
+                     ORDER BY date,duration_ms DESC""",
+                turn_values,
+            ).fetchall())
+            runtime_turns = rows_as_dicts(conn.execute(
+                f"""SELECT date,started_utc,completed_utc,duration_ms
+                      FROM turns{turn_where}
+                     ORDER BY date,started_utc""",
+                turn_values,
+            ).fetchall())
+
+            intervals_by_date: dict[str, list[dict[str, object]]] = {}
+            for row in runtime_turns:
+                intervals_by_date.setdefault(str(row.get("date") or ""), []).append(row)
+            active_by_date = {
+                day: merged_interval_ms(rows)
+                for day, rows in intervals_by_date.items()
+                if day
+            }
+
+            runtime_daily_map: dict[str, dict[str, object]] = {}
+            for row in runtime_by_agent:
+                day = str(row.get("date") or "")
+                daily = runtime_daily_map.setdefault(day, {
+                    "date": day,
+                    "agent_compute_ms": 0,
+                    "active_wall_ms": active_by_date.get(day, 0),
+                    "turns": 0,
+                    "duration_covered_turns": 0,
+                    "interval_covered_turns": 0,
+                    "api_cost": 0.0,
+                })
+                daily["agent_compute_ms"] = int(daily["agent_compute_ms"]) + int(row.get("duration_ms") or 0)
+                daily["turns"] = int(daily["turns"]) + int(row.get("turns") or 0)
+                daily["duration_covered_turns"] = int(daily["duration_covered_turns"]) + int(row.get("duration_covered_turns") or 0)
+                daily["interval_covered_turns"] = int(daily["interval_covered_turns"]) + int(row.get("interval_covered_turns") or 0)
+
+            daily_cost_rows = price_group_rows(
+                pricing_groups(conn, filters, [("date", "date")], pricing),
+                ["date"], pricing,
+            )
+            for row in daily_cost_rows:
+                day = str(row.get("date") or "")
+                daily = runtime_daily_map.setdefault(day, {
+                    "date": day,
+                    "agent_compute_ms": 0,
+                    "active_wall_ms": active_by_date.get(day, 0),
+                    "turns": 0,
+                    "duration_covered_turns": 0,
+                    "interval_covered_turns": 0,
+                    "api_cost": 0.0,
+                })
+                daily["api_cost"] = float(row.get("api_cost") or 0.0)
+
+            runtime_daily = []
+            for day in sorted(runtime_daily_map):
+                row = runtime_daily_map[day]
+                compute_hours = float(row["agent_compute_ms"] or 0) / 3_600_000.0
+                active_hours = float(row["active_wall_ms"] or 0) / 3_600_000.0
+                cost = float(row["api_cost"] or 0.0)
+                row["cost_per_agent_hour"] = cost / compute_hours if compute_hours else 0.0
+                row["cost_per_active_hour"] = cost / active_hours if active_hours else 0.0
+                row["parallelism_factor"] = compute_hours / active_hours if active_hours else 0.0
+                runtime_daily.append(row)
+
+            total_compute_ms = sum(int(row.get("agent_compute_ms") or 0) for row in runtime_daily)
+            total_active_ms = sum(int(row.get("active_wall_ms") or 0) for row in runtime_daily)
+            total_runtime_turns = sum(int(row.get("turns") or 0) for row in runtime_daily)
+            total_duration_covered = sum(int(row.get("duration_covered_turns") or 0) for row in runtime_daily)
+            total_interval_covered = sum(int(row.get("interval_covered_turns") or 0) for row in runtime_daily)
+            total_api_cost = sum(float(row.get("api_cost") or 0.0) for row in runtime_daily)
+            compute_hours = total_compute_ms / 3_600_000.0
+            active_hours = total_active_ms / 3_600_000.0
+            runtime_summary = {
+                "agent_compute_ms": total_compute_ms,
+                "active_wall_ms": total_active_ms,
+                "parallelism_factor": compute_hours / active_hours if active_hours else 0.0,
+                "api_cost": total_api_cost,
+                "cost_per_agent_hour": total_api_cost / compute_hours if compute_hours else 0.0,
+                "cost_per_active_hour": total_api_cost / active_hours if active_hours else 0.0,
+                "turns": total_runtime_turns,
+                "duration_coverage_pct": total_duration_covered / total_runtime_turns * 100.0 if total_runtime_turns else 0.0,
+                "interval_coverage_pct": total_interval_covered / total_runtime_turns * 100.0 if total_runtime_turns else 0.0,
+            }
 
             act_where, act_values = where_for(filters)
             skill_activity = rows_as_dicts(conn.execute(
@@ -756,7 +885,11 @@ def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
             return {
                 "ready": True, "tab": "activity", "filters": filters,
                 "metadata": decode_metadata(conn), "daily_models": daily_models,
-                "turns_by_model": turns_by_model, "skill_activity": skill_activity,
+                "turns_by_model": turns_by_model,
+                "runtime_summary": runtime_summary,
+                "runtime_daily": runtime_daily,
+                "runtime_by_agent": runtime_by_agent,
+                "skill_activity": skill_activity,
                 "skill_totals": skill_totals, "skill_invocations": skill_invocations,
                 "distinct_skills": len(skill_totals), "configured_skills": configured,
                 "code_metric_note": "Patch lines were removed from the dashboard because the local rollout format does not capture all code-writing paths consistently. A trustworthy generated-lines metric would require Git/repository diff correlation rather than rollout counting alone.",
