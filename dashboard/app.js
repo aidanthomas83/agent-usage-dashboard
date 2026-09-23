@@ -371,7 +371,7 @@ function renderInsights(data){
       ${insight('Context','Average input / response',fmt(s.avg_input),'Average request context sent to the model.','var(--blue)')}
       ${insight('Context','P95 input / response',fmt(s.p95_input),'95% of responses have input at or below this value.','var(--purple)')}
       ${insight('Context','Context amplification',n(s.context_amplification).toFixed(1)+'×','Total input ÷ fresh input. High values indicate repeated/cached context.','var(--teal)')}
-      ${insight('Compaction','Compaction overhead',fmt(s.compaction_tokens),`${fmtCredits(s.compaction_credits)} estimated Codex credits in compaction responses.`,'var(--orange)')}
+      ${insight('Compaction','Compaction overhead',fmt(s.compaction_tokens),`${fmtCredits(s.compaction_credits)} estimated credits · ${pct(s.compaction_attribution_coverage_pct)} response coverage for reliable compaction attribution.`,'var(--orange)')}
       ${insight('Latency','Average turn duration',fmtMs(t.avg_duration_ms),`P95 ${fmtMs(t.p95_duration_ms)}.`,'var(--blue)')}
       ${insight('Latency','Time to first token',fmtMs(t.avg_ttft_ms),`P95 ${fmtMs(t.p95_ttft_ms)}.`,'var(--green)')}
       ${insight('Reliability','Failed / aborted turns',pct(t.failure_rate_pct),`${fmtExact(t.failed_turns)} of ${fmtExact(t.turns)} recorded turns.`,'var(--red)')}
