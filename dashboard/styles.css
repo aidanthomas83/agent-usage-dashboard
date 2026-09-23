@@ -60,3 +60,9 @@
 .kpis.runtime-kpis{grid-template-columns:repeat(6,minmax(0,1fr))}
 @media(max-width:1200px){.kpis.runtime-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.kpis.runtime-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.section-kicker{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:4px 0 8px}
+.subscription-runtime-kpis{margin-bottom:14px}
+.mcp-grid{margin-top:16px;align-items:start}
+.mcp-grid .table-wrap{max-height:390px;overflow:auto}
+.mcp-grid code{font-size:11px;white-space:nowrap}
