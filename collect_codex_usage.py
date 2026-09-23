@@ -170,8 +170,8 @@ SKILL_PATH_RE = re.compile(r"(?:^|[\\/])skills[\\/](?:[^\\/\\r\\n\\\"\'<>]+[\\/]
 # Only treat these phrases as invocations when the name resolves to a configured
 # local skill; this avoids counting ordinary conversation text as skill usage.
 SKILL_ACTION_RE = re.compile(
-    r"\\b(?:read|load(?:ed)?|use(?:d|ing)?|invoke(?:d|ing)?|run|ran)\\s+"
-    r"(?:the\\s+)?[`\'\\\"]?([A-Za-z0-9][A-Za-z0-9 _./:+\\-]{0,120}?)[`\'\\\"]?\\s+skill\\b",
+    r"\b(?:read|load(?:ed)?|use(?:d|ing)?|invoke(?:d|ing)?|run|ran)\s+"
+    r"(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 _./:+\-]{0,120}?)\s+skill\b",
     re.IGNORECASE,
 )
 MCP_CALL_RE = re.compile(r"(?:tools\\.)?mcp__([A-Za-z0-9_]+)__([A-Za-z0-9_]+)")
