@@ -320,10 +320,8 @@ function renderActivity(data){
   const skills=data.skill_totals||[],inv=n(data.skill_invocations),distinct=n(data.distinct_skills),collapsed=collapseSkillSeries(data.skill_activity||[],7);
   return`
     <div class="tab-title"><div><h2>Activity over time</h2><p>Model/turn activity plus skill usage. Generic tool-call telemetry has been removed from the visual dashboard because it mixes shell, MCP, plugin and function invocations into one broad count.</p></div></div>
-    <div class="activity-grid">
-      <div class="panel"><h3>Tokens by model</h3><div class="desc">Total token traffic by model over time.</div><div class="chart">${lineChart(data.daily_models||[],'model','total_tokens',modelColor,{height:300,maxSeries:8})}</div></div>
-      <div class="panel"><h3>Turns by model</h3><div class="desc">Recorded task/turn volume by model over time.</div><div class="chart">${lineChart(data.turns_by_model||[],'model','turns',modelColor,{height:300,maxSeries:8})}</div></div>
-    </div>
+    <div class="panel full-panel"><h3>Tokens by model</h3><div class="desc">Total token traffic by model over time.</div><div class="chart activity-chart-large">${lineChart(data.daily_models||[],'model','total_tokens',modelColor,{height:380,maxSeries:8})}</div></div>
+    <div class="panel full-panel mt"><h3>Turns by model</h3><div class="desc">Recorded task/turn volume by model over time.</div><div class="chart activity-chart-large">${lineChart(data.turns_by_model||[],'model','turns',modelColor,{height:380,maxSeries:8})}</div></div>
     <div class="panel activity-skills">
       <h3>Skill invocations over time</h3>
       <div class="desc">All ${fmtExact(inv)} invocations across ${fmtExact(distinct)} distinct skills are represented. The seven most-used skills are shown individually and the remainder are combined into Other.</div>
