@@ -862,6 +862,7 @@ def parse_rollout(
             total = to_int(usage.get("total_tokens")) or inp + out
             fresh = max(0, inp - cached)
             credits, rate_status = estimate_credits(ctx.get("model", ""), fresh, cached, out, ctx.get("service_tier", ""))
+            api_cost, api_status, api_long = estimate_api_cost(ctx.get("model", ""), inp, cached, cache_write, out)
             records.append({
                 "date": date_key, "timestamp_utc": iso_utc(ts_utc), "timestamp_local": ts_local.isoformat(),
                 "session_id": session_id, "session_name": thread_names.get(session_id, "") or session_name_default,
@@ -877,7 +878,9 @@ def parse_rollout(
                 "input_tokens": inp, "cached_input_tokens": cached, "cache_write_input_tokens": cache_write, "fresh_input_tokens": fresh,
                 "output_tokens": out, "reasoning_output_tokens": reasoning, "total_tokens": total,
                 "cache_hit_pct": round((cached / inp * 100.0) if inp else 0.0, 4),
-                "estimated_credits": round(credits, 6), "credit_rate_status": rate_status, "source_rollout": rel,
+                "estimated_credits": round(credits, 6), "credit_rate_status": rate_status,
+                "api_equivalent_cost_usd": round(api_cost, 6), "api_cost_rate_status": api_status,
+                "api_long_context": "true" if api_long else "false", "source_rollout": rel,
             })
 
     # Materialize turn rows, including turns without token usage.
@@ -1001,11 +1004,16 @@ def load_csv(path: Path, fields: list[str], int_fields: set[str] | None = None, 
 
 def upgrade_record(row: dict[str, Any]) -> dict[str, Any]:
     inp = to_int(row.get("input_tokens")); cached = to_int(row.get("cached_input_tokens")); out = to_int(row.get("output_tokens"))
+    cache_write = to_int(row.get("cache_write_input_tokens"))
     fresh = to_int(row.get("fresh_input_tokens")) or max(0, inp - cached)
     row["fresh_input_tokens"] = fresh
     credits, status = estimate_credits(str(row.get("model") or ""), fresh, cached, out, str(row.get("service_tier") or ""))
     row["estimated_credits"] = round(credits, 6)
     row["credit_rate_status"] = status
+    api_cost, api_status, api_long = estimate_api_cost(str(row.get("model") or ""), inp, cached, cache_write, out)
+    row["api_equivalent_cost_usd"] = round(api_cost, 6)
+    row["api_cost_rate_status"] = api_status
+    row["api_long_context"] = "true" if api_long else "false"
     return row
 
 
