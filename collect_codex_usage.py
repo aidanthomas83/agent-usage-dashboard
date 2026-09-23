@@ -23,9 +23,10 @@ import csv
 import json
 import os
 import re
+import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -196,13 +197,39 @@ MCP_CALL_RE = re.compile(r"(?:tools\.)?mcp__([A-Za-z0-9_]+)__([A-Za-z0-9_]+)")
 def parse_args() -> argparse.Namespace:
     here = Path(__file__).resolve().parent
     default_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    p = argparse.ArgumentParser(description="Extract Codex usage for the last N local calendar days.")
-    p.add_argument("--days", type=int, required=True, help="Local calendar days to rebuild, including today.")
+    p = argparse.ArgumentParser(description="Extract Codex usage for a local calendar date range.")
+    p.add_argument("--days", type=int, help="Local calendar days to rebuild, including today.")
+    p.add_argument("--from-date", help="First local date to rebuild (YYYY-MM-DD).")
+    p.add_argument("--to-date", help="Last local date to rebuild, inclusive (YYYY-MM-DD).")
     p.add_argument("--codex-home", type=Path, default=default_home, help=f"Codex data directory (default: {default_home}).")
     p.add_argument("--output-dir", type=Path, default=here / "data", help="Output directory (default: ./data).")
     p.add_argument("--scan-all", action="store_true", help="Scan every rollout rather than narrowing by mtime.")
     p.add_argument("--verbose", action="store_true", help="Print malformed/skipped details.")
     return p.parse_args()
+
+
+def resolve_selected_dates(args: argparse.Namespace, local_tz) -> list[date]:
+    today = datetime.now(local_tz).date()
+    using_range = bool(args.from_date or args.to_date)
+    if args.days is not None and using_range:
+        raise ValueError("Use either --days or --from-date/--to-date, not both.")
+    if using_range:
+        if not args.from_date or not args.to_date:
+            raise ValueError("--from-date and --to-date must be provided together.")
+        try:
+            start = date.fromisoformat(args.from_date)
+            end = date.fromisoformat(args.to_date)
+        except ValueError as exc:
+            raise ValueError("Dates must use YYYY-MM-DD.") from exc
+        if end < start:
+            raise ValueError("--to-date must be on or after --from-date.")
+    else:
+        days = 7 if args.days is None else args.days
+        if days < 1:
+            raise ValueError("--days must be at least 1.")
+        end = today
+        start = today - timedelta(days=days - 1)
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
 def parse_iso(ts: Any) -> datetime | None:
