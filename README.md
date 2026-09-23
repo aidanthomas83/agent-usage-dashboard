@@ -12,6 +12,13 @@ A local, read-only Codex telemetry collector plus an offline dashboard.
    run-usage-report.cmd 7
    ```
 
+The runner also accepts the explicit collector-style syntax:
+
+```bat
+run-usage-report.cmd --days 90
+run-usage-report.cmd --days 90 --scan-all
+```
+
 `7` means **today plus the previous 6 local calendar days**. The command refreshes those day partitions and opens `dashboard\index.html`.
 
 Direct usage:
@@ -64,6 +71,41 @@ It records:
 `fresh_input_tokens = input_tokens - cached_input_tokens`.
 
 Reasoning output is already included in output tokens, so it is **not added a second time**.
+
+## API-equivalent token cost
+
+The dashboard also calculates a **counterfactual Standard OpenAI API token cost in USD**. This is intended to help assess the value delivered by the subscription: for the currently selected dashboard date range, it asks what the same recorded model-token traffic would cost at the embedded current API rate card.
+
+The embedded API rate card is dated **23 Sep 2026**. Representative short-context Standard rates per 1M tokens are:
+
+| Model | Input | Cached input | Cache write | Output |
+|---|---:|---:|---:|---:|
+| GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
+| GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
+| GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
+| GPT-5.6 Sol | $4.00 | $0.40 | $5.00 | $20.00 |
+| GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
+| GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
+
+For supported long-context models, requests with more than 272K input tokens use the documented full-request long-context multipliers: 2x input/cached/cache-write rates and 1.5x output.
+
+Cache writes are treated as their own token category rather than as an additional surcharge on ordinary input. The estimate is therefore:
+
+```text
+ordinary input = input - cached input - cache-write input
+
+API token cost =
+  ordinary input × input rate
++ cached input × cached rate
++ cache-write input × cache-write rate
++ output × output rate
+```
+
+The dashboard reports API-equivalent cost by **day, model, agent/role and session**, plus pricing coverage and the number of long-context responses.
+
+This is a **token-only counterfactual**, not an API invoice. It excludes separately priced API services such as web-search calls, containers, storage, regional processing and other non-token tool charges. Rates are embedded so the local collector stays offline/reproducible; when OpenAI changes prices, the rate table should be updated.
+
+Current API pricing reference: https://developers.openai.com/api/docs/pricing
 
 ## Estimated Codex credits
 
@@ -158,7 +200,7 @@ All columns are sortable. The table includes:
 - top-model colour pill;
 - agents, turns and responses;
 - compactions;
-- estimated credits + credit coverage;
+- estimated credits + credit coverage;\n- API-equivalent token cost + API pricing coverage;
 - fresh/cached/output/total tokens;
 - accumulated turn duration;
 - maximum observed context utilisation;
@@ -172,7 +214,7 @@ Everything stays local. The collector reads your local Codex files and writes su
 
 This repository is designed to contain **source code only**. Generated Codex telemetry can include session names, project paths, agent names, timestamps, identifiers, and usage history, so it should stay local.
 
-The included `.gitignore` excludes generated `data/`, preview/test outputs, Codex JSONL/session databases, environment files, keys, backups, and other local artefacts. A GitHub Actions safety check also rejects tracked telemetry paths and scans tracked text files for common credential formats and user-specific absolute home paths.
+The included `.gitignore` excludes generated `data/`, preview/test outputs, Codex JSONL/session databases, environment files, keys, backups, and other local artefacts. GitHub Actions also compiles the Python collector, smoke-tests an empty local run, validates dashboard JavaScript syntax, rejects tracked telemetry paths, and scans tracked text files for common credential formats and user-specific absolute home paths.
 
 Before publishing a change manually, you can run:
 
