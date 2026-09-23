@@ -108,7 +108,8 @@ RECORD_FIELDS = [
     "model", "reasoning_effort", "service_tier", "turn_id", "root_turn_id", "response_id",
     "is_compaction", "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "fresh_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens",
-    "cache_hit_pct", "estimated_credits", "credit_rate_status",\n    "api_equivalent_cost_usd", "api_cost_rate_status", "api_long_context", "source_rollout",
+    "cache_hit_pct", "estimated_credits", "credit_rate_status",
+    "api_equivalent_cost_usd", "api_cost_rate_status", "api_long_context", "source_rollout",
 ]
 RECORD_INT_FIELDS = {
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens", "fresh_input_tokens",
