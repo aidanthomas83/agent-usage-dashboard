@@ -567,6 +567,138 @@ def configured_skill_aliases(skills: list[dict[str, str]] | None) -> dict[str, s
                 aliases[key] = canonical
     return aliases
 
+def parse_maybe_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def structured_tool_args(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return structured tool arguments when a rollout stores them as JSON."""
+    for key in ("arguments", "input", "args"):
+        value = parse_maybe_json(payload.get(key))
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def command_strings_from_payload(payload: dict[str, Any]) -> list[str]:
+    """Extract likely shell command strings without retaining tool output/content."""
+    candidates: list[str] = []
+    for key in ("input", "arguments", "args"):
+        value = parse_maybe_json(payload.get(key))
+        if isinstance(value, str):
+            candidates.append(value)
+        elif isinstance(value, dict):
+            for field in ("cmd", "command", "script", "shell_command"):
+                command = value.get(field)
+                if isinstance(command, str) and command.strip():
+                    candidates.append(command)
+                elif isinstance(command, list):
+                    candidates.extend(str(part) for part in command if isinstance(part, str))
+        elif isinstance(value, list):
+            candidates.extend(str(part) for part in value if isinstance(part, str))
+    return candidates
+
+
+_SKILL_READ_COMMAND_RE = re.compile(
+    r"(?i)(?:^|[;&|\n\r]\s*|\b)(?:get-content|gc|type|cat|sed|head|tail|less|more|bat|"
+    r"read-file|read_file|read-text|read_text|read_text_file|readalltext)\b"
+)
+_SKILL_SCRIPT_RUNNER_RE = re.compile(
+    r"(?i)(?:^|[;&|\n\r]\s*|\b)(?:python(?:3)?|py|bash|zsh|sh|node|deno|ruby|perl|pwsh|powershell)\b"
+)
+
+
+def configured_skill_accesses_from_command(
+    command: str,
+    configured_skills: list[dict[str, str]] | None,
+) -> list[str]:
+    """Best-effort mirror of Codex implicit skill invocation detection.
+
+    Codex itself treats a parsed read of an exact skill document, or execution of
+    a script beneath that skill's scripts directory, as an implicit invocation.
+    We deliberately require the concrete configured skill path/name so generic
+    searches such as skills/**/SKILL.md do not become false invocations.
+    """
+    if not command:
+        return []
+    normalized = command.replace("\\", "/").lower()
+    is_read = bool(_SKILL_READ_COMMAND_RE.search(normalized))
+    is_script_run = bool(_SKILL_SCRIPT_RUNNER_RE.search(normalized))
+    if not is_read and not is_script_run:
+        return []
+
+    found: list[str] = []
+    for row in configured_skills or []:
+        canonical = clean_skill_name(row.get("name"))
+        if not canonical:
+            continue
+        skill_file = str(row.get("skill_file") or "").replace("\\", "/").strip("/")
+        skill_file_lower = skill_file.lower()
+        skill_dir = skill_file_lower.rsplit("/", 1)[0] if "/" in skill_file_lower else ""
+        name_key = skill_identity_key(canonical)
+
+        doc_match = False
+        if is_read:
+            if skill_file_lower and skill_file_lower in normalized:
+                doc_match = True
+            elif name_key:
+                # Absolute paths, environment-expanded paths, and plugin roots can
+                # differ before the skill directory. Require both the concrete
+                # skill directory name and SKILL.md rather than a wildcard path.
+                doc_match = bool(
+                    re.search(
+                        rf"(?:^|/){re.escape(name_key)}(?:/|\\).*?skill\.md\b",
+                        normalized.replace("_", "-"),
+                    )
+                )
+
+        script_match = False
+        if is_script_run and skill_dir:
+            script_match = f"{skill_dir}/scripts/" in normalized
+        if is_script_run and not script_match and name_key:
+            script_match = bool(
+                re.search(
+                    rf"(?:^|/){re.escape(name_key)}/scripts/[^\s\"']+",
+                    normalized.replace("_", "-"),
+                )
+            )
+
+        if doc_match or script_match:
+            found.append(canonical)
+    return found
+
+
+def configured_skill_from_skills_read(
+    payload: dict[str, Any],
+    configured_skills: list[dict[str, str]] | None,
+) -> str:
+    """Resolve the newer built-in skills.read call when present in rollouts."""
+    name = str(payload.get("name") or payload.get("tool_name") or "").strip().lower()
+    if name not in {"skills.read", "skills__read", "skills/read", "read"}:
+        return ""
+    args = structured_tool_args(payload)
+    package = clean_skill_name(args.get("package"))
+    if not package:
+        return ""
+    # Codex analytics counts the first read of the main skill prompt, not
+    # pagination continuations or arbitrary referenced resources.
+    if args.get("cursor"):
+        return ""
+    resource = str(args.get("resource") or "").strip()
+    if resource and not resource.lower().endswith("skill.md"):
+        return ""
+    aliases = configured_skill_aliases(configured_skills)
+    return aliases.get(skill_identity_key(package), "")
+
+
 def call_payload_text(payload: dict[str, Any]) -> str:
     for key in ("input", "arguments", "args"):
         value = payload.get(key)
@@ -886,16 +1018,6 @@ def parse_rollout(
                 for match in SKILL_PATH_RE.finditer(fragment):
                     skill = clean_skill_name(match.group(1))
                     stage_skill(skill, f"skill-path:{item_turn}:{skill}", item_turn, ts_utc, ctx_for_item)
-                if role != "user":
-                    for match in SKILL_ACTION_RE.finditer(fragment):
-                        stage_skill(
-                            match.group(1),
-                            f"skill-summary:{item_turn}:{match.group(1)}",
-                            item_turn,
-                            ts_utc,
-                            ctx_for_item,
-                            require_configured=True,
-                        )
             if rt.lower() in {"skill", "skill_invocation"}:
                 stage_skill(payload.get("name") or payload.get("skill_name"), str(payload.get("id") or ""), item_turn, ts_utc, ctx_for_item)
 
@@ -920,20 +1042,32 @@ def parse_rollout(
                 for m in MCP_CALL_RE.finditer(text):
                     plugin_events.append({"call_id": cid, "plugin": m.group(1).replace("_", " "), "tool": m.group(2), "turn_id": item_turn, "timestamp": ts_utc, "ctx": dict(ctx)})
                 seen_skills: set[str] = set()
+
+                # Newer Codex builds expose a first-class skills.read tool.
+                structured_skill = configured_skill_from_skills_read(payload, configured_skills)
+                if structured_skill:
+                    seen_skills.add(structured_skill)
+                    stage_skill(structured_skill, cid, item_turn, ts_utc, ctx, require_configured=True)
+
+                # Current Codex also recognizes implicit skill use from shell
+                # commands: an exact skill-document read or execution of a
+                # script under that skill's scripts directory. Mirror that
+                # behavior against the configured local inventory.
+                for command in command_strings_from_payload(payload):
+                    for skill in configured_skill_accesses_from_command(command, configured_skills):
+                        if skill not in seen_skills:
+                            seen_skills.add(skill)
+                            stage_skill(skill, cid, item_turn, ts_utc, ctx, require_configured=True)
+
+                # Retain explicit skill:// references for older rollout formats.
                 for m in SKILL_URI_RE.finditer(text):
                     uri_path = m.group(1).strip("/")
                     parts = [p for p in uri_path.split("/") if p]
                     skill = parts[-1] if parts else uri_path
-                    if skill and skill not in seen_skills:
-                        seen_skills.add(skill)
-                        stage_skill(skill, cid, item_turn, ts_utc, ctx)
-                # Implicit Codex skill invocation may only be visible as a generic
-                # shell/file read of a local .../skills/<name>/SKILL.md path.
-                for m in SKILL_PATH_RE.finditer(text):
-                    skill = clean_skill_name(m.group(1))
-                    if skill and skill not in seen_skills:
-                        seen_skills.add(skill)
-                        stage_skill(skill, cid, item_turn, ts_utc, ctx)
+                    resolved = resolve_skill(skill, require_configured=True)
+                    if resolved and resolved not in seen_skills:
+                        seen_skills.add(resolved)
+                        stage_skill(resolved, cid, item_turn, ts_utc, ctx, require_configured=True)
                 continue
             if rt in {"function_call_output", "custom_tool_call_output", "mcp_call_output", "local_shell_call_output"}:
                 cid = str(payload.get("call_id") or "")
