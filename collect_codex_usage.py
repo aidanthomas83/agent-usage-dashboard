@@ -996,4 +996,72 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
 
 def write_dashboard_data(path: Path, records: list[dict[str, Any]], turns: list[dict[str, Any]], activities: list[dict[str, Any]], limits: list[dict[str, Any]], metadata: dict[str, Any], configured_agents: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"metadata":metadata,"records":records,"turns":turns,"activities":activities,"rate_limits":limits,"configured_agents":configured_agents}
+    payload = {"metadata":metadata,"records":records,"turns":turns,"activities":activities,"rate_limits":limits,"configured_agents":configured_agents}    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write("window.CODEX_USAGE_DATA = "); json.dump(payload,f,ensure_ascii=False,separators=(",",":")); f.write(";\n")
+    os.replace(tmp,path)
+
+
+def main() -> int:
+    args=parse_args()
+    if args.days<1:
+        print("--days must be at least 1",file=sys.stderr); return 2
+    codex_home=args.codex_home.expanduser().resolve(); output_dir=args.output_dir.expanduser().resolve()
+    if not codex_home.exists():
+        print(f"Codex home not found: {codex_home}",file=sys.stderr); return 1
+
+    records_path=output_dir/"codex_usage_records.csv"; turns_path=output_dir/"codex_turns.csv"; activity_path=output_dir/"codex_activity.csv"; limits_path=output_dir/"codex_rate_limits.csv"
+    daily_path=output_dir/"codex_usage_daily.csv"; data_path=output_dir/"codex_usage_data.js"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"
+
+    local_tz=datetime.now().astimezone().tzinfo; today=datetime.now(local_tz).date(); dates=[today-timedelta(days=i) for i in range(args.days)]
+    selected={d.isoformat() for d in dates}; earliest=min(dates); earliest_local=datetime.combine(earliest,datetime.min.time(),tzinfo=local_tz)
+    names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
+
+    existing_records=load_csv(records_path,RECORD_FIELDS,RECORD_INT_FIELDS,RECORD_FLOAT_FIELDS)
+    existing_turns=load_csv(turns_path,TURN_FIELDS,TURN_INT_FIELDS,TURN_FLOAT_FIELDS)
+    existing_activity=load_csv(activity_path,ACTIVITY_FIELDS,ACTIVITY_INT_FIELDS,set())
+    existing_limits=load_csv(limits_path,LIMIT_FIELDS,LIMIT_INT_FIELDS,LIMIT_FLOAT_FIELDS)
+    retained_records=[r for r in existing_records if str(r.get("date") or "") not in selected]
+    retained_turns=[r for r in existing_turns if str(r.get("date") or "") not in selected]
+    retained_activity=[r for r in existing_activity if str(r.get("date") or "") not in selected]
+    retained_limits=[r for r in existing_limits if str(r.get("date") or "") not in selected]
+
+    rebuilt_records=[]; rebuilt_turns=[]; rebuilt_activity=[]; rebuilt_limits=[]; files_with_usage=0
+    for path in rollouts:
+        r,t,a,l=parse_rollout(path,selected,local_tz,names,codex_home,args.verbose)
+        if r or t or a: files_with_usage+=1
+        rebuilt_records.extend(r); rebuilt_turns.extend(t); rebuilt_activity.extend(a); rebuilt_limits.extend(l)
+
+    records=dedupe_records(retained_records+rebuilt_records)
+    turns=dedupe_turns(retained_turns+rebuilt_turns); turns=enrich_turns(turns,records)
+    activities=dedupe_activity(retained_activity+rebuilt_activity)
+    limits=dedupe_limits(retained_limits+rebuilt_limits)
+
+    write_csv_atomic(records_path,records,RECORD_FIELDS); write_csv_atomic(turns_path,turns,TURN_FIELDS); write_csv_atomic(activity_path,activities,ACTIVITY_FIELDS); write_csv_atomic(limits_path,limits,LIMIT_FIELDS); write_csv_atomic(agents_path,agents,AGENT_FIELDS)
+    daily=daily_summary(records,turns,activities)
+    daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
+    write_csv_atomic(daily_path,daily,daily_fields)
+
+    now=datetime.now(local_tz); priced_tokens=sum(to_int(r.get("total_tokens")) for r in records if str(r.get("credit_rate_status") or "").startswith("priced")); all_tokens=sum(to_int(r.get("total_tokens")) for r in records)
+    metadata={
+        "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),"processed_dates":sorted(selected),"days_requested":args.days,
+        "rollout_files_scanned":len(rollouts),"rollout_files_with_selected_activity":files_with_usage,"rebuilt_responses":len(dedupe_records(rebuilt_records)),"dataset_responses":len(records),"dataset_turns":len(turns),"dataset_activities":len(activities),
+        "dataset_first_date":min((r["date"] for r in records),default=None),"dataset_last_date":max((r["date"] for r in records),default=None),"configured_agents":len(agents),
+        "credit_rate_as_of":CREDIT_RATE_AS_OF,"credit_rate_source":CREDIT_RATE_SOURCE,"credit_coverage_pct":round((priced_tokens/all_tokens*100.0) if all_tokens else 0.0,4),
+        "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
+        "accounting_note":"Per-response token_usage_record rows deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+    }
+    write_dashboard_data(data_path,records,turns,activities,limits,metadata,agents)
+    with metadata_path.open("w",encoding="utf-8") as f: json.dump(metadata,f,indent=2); f.write("\n")
+
+    ds=sorted(selected)
+    print(f"Processed {args.days} day(s): {ds[0]} through {ds[-1]}")
+    print(f"Scanned {len(rollouts)} rollout file(s); {files_with_usage} contained selected activity")
+    print(f"Rebuilt {len(dedupe_records(rebuilt_records)):,} response record(s), {len(dedupe_turns(rebuilt_turns)):,} turn(s), {len(dedupe_activity(rebuilt_activity)):,} activity record(s)")
+    print(f"Dataset: {len(records):,} responses | {len(turns):,} turns | {len(activities):,} activities")
+    print(f"Credit estimate coverage: {metadata['credit_coverage_pct']:.1f}% of token volume")
+    print(f"Dashboard: {Path(__file__).resolve().parent/'dashboard'/'index.html'}")
+    return 0
+
+if __name__=="__main__":
+    raise SystemExit(main())
