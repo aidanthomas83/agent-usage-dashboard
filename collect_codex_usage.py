@@ -1500,17 +1500,57 @@ def dedupe_records(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def dedupe_turns(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    by: dict[tuple[str, str], dict[str, Any]] = {}
+    # First collapse repeated lifecycle updates within one rollout/thread.
+    by_thread: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         key = (str(row.get("thread_id") or ""), str(row.get("turn_id") or ""))
         if not all(key):
             continue
         stamp = str(row.get("completed_utc") or row.get("started_utc") or "")
-        prev = by.get(key)
+        prev = by_thread.get(key)
         prev_stamp = str(prev.get("completed_utc") or prev.get("started_utc") or "") if prev else ""
         if prev is None or stamp >= prev_stamp:
-            by[key] = row
-    return sorted(by.values(), key=lambda r: (str(r.get("started_utc") or r.get("completed_utc") or ""), str(r.get("thread_id") or "")))
+            by_thread[key] = row
+
+    # Older fork/subagent rollouts can contain copied parent lifecycle history.
+    # Do not globally dedupe on turn_id alone: some old builds reused generic
+    # identifiers such as "rollout-2" for genuinely different turns. An exact
+    # lifecycle clone (same id + start + completion + duration), however, is the
+    # same persisted turn copied into another rollout. Keep one canonical row.
+    canonical: dict[tuple[str, str, str, int], dict[str, Any]] = {}
+
+    def score(row: dict[str, Any]) -> tuple[int, int, int, int]:
+        status = str(row.get("status") or "")
+        terminal = 1 if status in {"completed", "failed", "aborted"} else 0
+        main = 1 if str(row.get("agent_type") or "") == "Main" else 0
+        role = 1 if str(row.get("agent_role") or "") else 0
+        duration = 1 if to_int(row.get("duration_ms")) > 0 else 0
+        return terminal, duration, main, role
+
+    for row in by_thread.values():
+        turn_id = str(row.get("turn_id") or "")
+        started = str(row.get("started_utc") or "")
+        completed = str(row.get("completed_utc") or "")
+        duration = to_int(row.get("duration_ms"))
+
+        # Incomplete rows do not provide enough evidence for cross-thread
+        # clone detection; retain them independently.
+        if not turn_id or not started or not completed:
+            key = (f"{row.get('thread_id')}:{turn_id}", started, completed, duration)
+        else:
+            key = (turn_id, started, completed, duration)
+
+        prev = canonical.get(key)
+        if prev is None or score(row) > score(prev):
+            canonical[key] = row
+
+    return sorted(
+        canonical.values(),
+        key=lambda r: (
+            str(r.get("started_utc") or r.get("completed_utc") or ""),
+            str(r.get("thread_id") or ""),
+        ),
+    )
 
 
 def dedupe_activity(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
