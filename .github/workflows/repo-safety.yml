@@ -15,5 +15,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m py_compile collect_codex_usage.py scripts/check_repo_safety.py
+      - name: Check collector CLI
+        run: python collect_codex_usage.py --help > /dev/null
       - name: Check tracked files for local telemetry and credentials
         run: python scripts/check_repo_safety.py
