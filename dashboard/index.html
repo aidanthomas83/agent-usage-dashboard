@@ -1,1 +1,207 @@
-The requested file reference is not currently visible. Use files.search or files.list to rediscover the file, then retry with a returned ref_id or file_id.
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Codex Usage Dashboard</title>
+<style>
+:root{
+  color-scheme:light dark;
+  --bg:#f5f7fa;--panel:#fff;--panel2:#f8fafc;--text:#101418;--muted:#67717e;--line:#dde3ea;
+  --blue:#0876db;--orange:#ee8726;--green:#37ae69;--pink:#e85d9e;--purple:#7c5ce5;--teal:#159a8c;
+  --amber:#c07d12;--red:#d64f5f;--slate:#5f6b78;--shadow:0 8px 24px rgba(24,35,49,.055);
+}
+@media(prefers-color-scheme:dark){:root{--bg:#101317;--panel:#171b20;--panel2:#1d2228;--text:#edf2f7;--muted:#a2acb8;--line:#2c333b;--shadow:none}}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.shell{max-width:1480px;margin:0 auto;padding:28px 32px 40px}.header{display:flex;align-items:flex-end;justify-content:space-between;gap:20px}.header h1{font-size:28px;line-height:1;margin:0 0 8px}.header p{margin:0;color:var(--muted)}
+.filter-row{margin:20px 0 16px;padding:12px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}.filters{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr)) auto;gap:10px;align-items:end}.field label{display:block;margin:0 0 4px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}.field input,.field select,button{width:100%;height:34px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);padding:0 9px;font:inherit}button{width:auto;cursor:pointer;padding:0 14px;background:var(--panel2)}button:hover{border-color:var(--blue)}
+.kpis{display:grid;grid-template-columns:repeat(8,1fr);gap:10px;margin-bottom:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}.card{padding:13px 14px;min-height:88px;border-top:3px solid var(--card-accent,var(--blue))}.card .label{color:var(--muted);font-size:11px}.card .value{font-size:22px;font-weight:750;margin:5px 0 2px;letter-spacing:-.02em}.card .sub{color:var(--muted);font-size:10px}.card.warn{--card-accent:var(--amber)}
+.section-title{margin:24px 0 10px}.section-title h2{font-size:16px;margin:0 0 2px}.section-title p{margin:0;color:var(--muted);font-size:11px}.panel{padding:14px}.panel h3{font-size:13px;margin:0 0 2px}.panel .desc{color:var(--muted);font-size:10.5px;margin-bottom:12px}.grid-2{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}.grid-2.equal{grid-template-columns:1fr 1fr}.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.span-2{grid-column:span 2}.mt{margin-top:14px}
+.chart{position:relative;min-height:260px}.chart svg{width:100%;height:auto;display:block;overflow:visible}.axis-label{fill:var(--muted);font-size:10px}.gridline{stroke:var(--line);stroke-width:1}.model-legend,.legend{display:flex;gap:12px 16px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:10px}.legend-item{display:inline-flex;align-items:center;gap:5px}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}.tooltip{position:fixed;z-index:50;pointer-events:none;display:none;min-width:190px;max-width:340px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--panel) 97%,transparent);box-shadow:0 10px 28px rgba(0,0,0,.18);font-size:11px;color:var(--text)}.tip-title{font-weight:750;margin-bottom:6px}.tip-row{display:grid;grid-template-columns:10px minmax(90px,1fr) auto;gap:6px;align-items:center;margin:3px 0}.tip-swatch{width:8px;height:8px;border-radius:2px;background:var(--tip-color,var(--muted))}.tip-value{font-variant-numeric:tabular-nums;text-align:right}.tip-divider{height:1px;background:var(--line);margin:6px 0}
+.hbars{display:grid;gap:8px}.hrow{display:grid;grid-template-columns:minmax(115px,1.1fr) minmax(90px,1.4fr) auto;gap:8px;align-items:center}.hname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.track{height:8px;background:var(--panel2);border-radius:999px;overflow:hidden}.fill{height:100%;border-radius:999px;background:var(--fill,var(--blue))}.hval{color:var(--muted);font-variant-numeric:tabular-nums;font-size:10px;white-space:nowrap}.model-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,var(--pill-color) 11%,transparent);border:1px solid color-mix(in srgb,var(--pill-color) 35%,var(--line));color:var(--text);font-size:10px}.model-pill:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--pill-color)}
+.agent-summary{display:flex;flex-wrap:wrap;gap:8px 14px;color:var(--muted);font-size:10px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.agent-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.agent-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;font-size:10px;background:var(--panel2)}.agent-pill:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--status,var(--muted))}.agent-pill.used{--status:var(--green)}.agent-pill.range{--status:var(--amber)}.agent-pill.never{--status:var(--pink)}
+.insight-cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.mini{border:1px solid var(--line);border-radius:9px;padding:11px;background:var(--panel2)}.mini .m-label{font-size:10px;color:var(--muted)}.mini .m-value{font-size:18px;font-weight:720;margin:4px 0 1px}.mini .m-sub{font-size:9.5px;color:var(--muted)}
+.table-wrap{overflow:auto;max-height:620px;border:1px solid var(--line);border-radius:9px}table{width:100%;border-collapse:collapse;min-width:1550px}th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{position:sticky;top:0;background:var(--panel);color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.035em;z-index:2}th.sortable{cursor:pointer;user-select:none}th.sortable:hover{color:var(--text);background:var(--panel2)}.sort-arrow{display:inline-block;width:10px;margin-left:2px;color:var(--blue)}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}tbody tr:hover{background:color-mix(in srgb,var(--blue) 4%,transparent)}.empty{padding:52px 20px;text-align:center;color:var(--muted)}
+.status-good{color:var(--green)}.status-warn{color:var(--amber)}.status-bad{color:var(--red)}.note{padding:9px 10px;border-radius:8px;background:var(--panel2);color:var(--muted);font-size:10px;border:1px solid var(--line)}.footer{color:var(--muted);font-size:10px;margin-top:14px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+@media(max-width:1200px){.kpis{grid-template-columns:repeat(4,1fr)}.insight-cards{grid-template-columns:repeat(3,1fr)}.filters{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:850px){.grid-2,.grid-2.equal,.grid-3,.grid-4{grid-template-columns:1fr}.span-2{grid-column:auto}.filters{grid-template-columns:repeat(2,1fr)}.kpis{grid-template-columns:repeat(2,1fr)}.shell{padding:18px}.insight-cards{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="header"><div><h1>Codex usage</h1><p>Local rollout telemetry · token, agent, activity and efficiency analysis</p></div></div>
+  <div class="filter-row" aria-label="Dashboard filters"><div class="filters">
+    <div class="field"><label>From</label><input id="fromDate" type="date"></div>
+    <div class="field"><label>To</label><input id="toDate" type="date"></div>
+    <div class="field"><label>Model</label><select id="modelFilter"><option value="">All models</option></select></div>
+    <div class="field"><label>Agent / role</label><select id="agentFilter"><option value="">All roles</option></select></div>
+    <div class="field"><label>Effort</label><select id="effortFilter"><option value="">All efforts</option></select></div>
+    <div class="field"><label>Project</label><select id="projectFilter"><option value="">All projects</option></select></div>
+    <button id="resetBtn" type="button">Reset</button>
+  </div></div>
+  <div id="content"></div>
+  <div class="footer"><span id="sourceNote"></span><span id="updatedNote"></span></div>
+</div>
+<div id="tooltip" class="tooltip"></div>
+<script src="../data/codex_usage_data.js"></script>
+<script>
+(()=>{
+'use strict';
+const bundle=window.CODEX_USAGE_DATA||{metadata:{},records:[],turns:[],activities:[],rate_limits:[],configured_agents:[]};
+const rows=Array.isArray(bundle.records)?bundle.records:[], turns=Array.isArray(bundle.turns)?bundle.turns:[], activities=Array.isArray(bundle.activities)?bundle.activities:[], limits=Array.isArray(bundle.rate_limits)?bundle.rate_limits:[], configuredAgents=Array.isArray(bundle.configured_agents)?bundle.configured_agents:[], meta=bundle.metadata||{};
+const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])), escAttr=s=>esc(s).replace(/\n/g,'&#10;');
+const n=v=>Number(v||0), sum=(rs,k)=>rs.reduce((a,r)=>a+n(r[k]),0), uniq=a=>[...new Set(a.filter(v=>v!==''&&v!=null))].sort((a,b)=>String(a).localeCompare(String(b)));
+const fmt=v=>{v=n(v);const a=Math.abs(v);if(a>=1e9)return(v/1e9).toFixed(a>=1e10?1:2)+'B';if(a>=1e6)return(v/1e6).toFixed(a>=1e7?1:2)+'M';if(a>=1e3)return(v/1e3).toFixed(a>=1e4?1:2)+'K';return Math.round(v).toLocaleString()};
+const fmtExact=v=>n(v).toLocaleString(undefined,{maximumFractionDigits:0}), fmtCredits=v=>n(v).toLocaleString(undefined,{minimumFractionDigits:n(v)<10?2:1,maximumFractionDigits:n(v)<10?2:1}), pct=v=>`${n(v).toFixed(1)}%`, fmtMs=v=>{v=n(v);if(!v)return'—';if(v>=60000)return`${(v/60000).toFixed(1)}m`;if(v>=1000)return`${(v/1000).toFixed(1)}s`;return`${Math.round(v)}ms`};
+function percentile(vals,p){const a=vals.map(n).filter(v=>v>0).sort((x,y)=>x-y);if(!a.length)return 0;const i=(a.length-1)*p,lo=Math.floor(i),hi=Math.ceil(i);return lo===hi?a[lo]:a[lo]+(a[hi]-a[lo])*(i-lo)}
+function hash(s){let h=2166136261;for(const c of String(s||'')){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+const MODEL_COLORS={
+  'gpt-5.6-luna':'#0876db','gpt-5.6-sol':'#ee8726','gpt-5.6-terra':'#37ae69','codex-auto-review':'#e85d9e','gpt-6-astra':'#7c5ce5','gpt-5.5':'#159a8c','gpt-5.4':'#c07d12','gpt-5.3-codex':'#d64f5f'
+};
+const COLOR_POOL=['#0876db','#ee8726','#37ae69','#e85d9e','#7c5ce5','#159a8c','#c07d12','#d64f5f','#3c8fd6','#8e6c4c','#4d9a9a','#a661c2'];
+function modelColor(name){const k=String(name||'Unknown').toLowerCase();return MODEL_COLORS[k]||COLOR_POOL[hash('model:'+k)%COLOR_POOL.length]}
+const AGENT_COLORS={'Main':'#5f6b78','executor':'#0876db','guardian_review':'#7c5ce5','reviewer':'#e85d9e','planner':'#ee8726','researcher':'#37ae69','security_review':'#d64f5f'};
+function agentColor(name){const k=String(name||'Subagent');return AGENT_COLORS[k]||COLOR_POOL[hash('agent:'+k)%COLOR_POOL.length]}
+function roleLabel(r){if((r.agent_type||'')==='Main')return'Main';return String(r.agent_role||r.agent_label||r.thread_source||'Subagent').split(' · ')[0]||'Subagent'}
+const roleKey=v=>String(v||'').trim().toLowerCase();
+function fmtDate(v,time=false){if(!v)return'—';const d=new Date(v);if(Number.isNaN(d.getTime()))return String(v).slice(0,time?16:10);return new Intl.DateTimeFormat('en-AU',time?{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}:{day:'2-digit',month:'short',year:'2-digit'}).format(d)}
+function axisDate(v){const [y,m,d]=String(v||'').split('-').map(Number),mons=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];return d&&m?`${String(d).padStart(2,'0')}-${mons[m-1]}`:String(v||'')}
+function setOptions(id,vals,label){$(id).innerHTML=`<option value="">${esc(label)}</option>`+vals.filter(v=>String(v||'').trim()).map(v=>`<option value="${escAttr(v)}">${esc(v)}</option>`).join('')}
+function initFilters(){if(!rows.length)return;const dates=uniq(rows.map(r=>r.date)).sort();$('fromDate').value=dates[0];$('toDate').value=dates.at(-1);setOptions('modelFilter',uniq(rows.map(r=>r.model)).sort(),'All models');setOptions('agentFilter',uniq(rows.map(roleLabel)).sort(),'All roles');setOptions('effortFilter',uniq(rows.map(r=>r.reasoning_effort)).sort(),'All efforts');setOptions('projectFilter',uniq(rows.map(r=>r.project)).sort(),'All projects')}
+function filterState(){return{from:$('fromDate').value,to:$('toDate').value,model:$('modelFilter').value,agent:$('agentFilter').value,effort:$('effortFilter').value,project:$('projectFilter').value}}
+function matches(r,state=filterState()){return(!state.from||String(r.date||'')>=state.from)&&(!state.to||String(r.date||'')<=state.to)&&(!state.model||String(r.model||'')===state.model)&&(!state.agent||roleKey(roleLabel(r))===roleKey(state.agent))&&(!state.effort||String(r.reasoning_effort||'')===state.effort)&&(!state.project||String(r.project||'')===state.project)}
+function filteredRows(state=filterState()){return rows.filter(r=>matches(r,state))} function filteredTurns(state=filterState()){return turns.filter(r=>matches(r,state))} function filteredActivities(state=filterState()){return activities.filter(r=>matches(r,state))}
+function group(rs,key,val='total_tokens'){const m=new Map();rs.forEach(r=>{const k=typeof key==='function'?key(r):(r[key]||'Unknown');m.set(k,(m.get(k)||0)+n(r[val]))});return[...m.entries()].sort((a,b)=>b[1]-a[1])}
+function groupCount(rs,key){const m=new Map();rs.forEach(r=>{const k=typeof key==='function'?key(r):(r[key]||'Unknown');m.set(k,(m.get(k)||0)+1)});return[...m.entries()].sort((a,b)=>b[1]-a[1])}
+function kpi(label,value,sub='',accent='var(--blue)',warn=false){return`<div class="card${warn?' warn':''}" style="--card-accent:${accent}"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>${sub?`<div class="sub">${esc(sub)}</div>`:''}</div>`}
+function tipJson(title,items){return escAttr(JSON.stringify({title,items}))}
+function hbars(entries,total,colorFn,maxRows=10,valueFmt=fmt){if(!entries.length)return'<div class="empty">No data for this selection.</div>';const shown=entries.slice(0,maxRows),mx=Math.max(...shown.map(x=>x[1]),1);return`<div class="hbars">${shown.map(([name,val])=>{const color=colorFn(name),share=total?pct(val/total*100):'';return`<div class="hrow" data-tip-json="${tipJson(name,[{label:'Value',value:valueFmt(val),color},{label:'Share',value:share,color}].filter(x=>x.value))}"><div class="hname" title="${esc(name)}">${esc(name)}</div><div class="track"><div class="fill" style="--fill:${color};width:${Math.max(1,val/mx*100)}%"></div></div><div class="hval">${valueFmt(val)}${total?` · ${share}`:''}</div></div>`}).join('')}</div>`}
+function legend(names,colorFn){return`<div class="model-legend">${names.map(x=>`<span class="legend-item"><span class="dot" style="background:${colorFn(x)}"></span>${esc(x)}</span>`).join('')}</div>`}
+function svgYTicks(max,count=4){const out=[];for(let i=0;i<=count;i++)out.push(max*i/count);return out}
+function dailyModelBars(rs,valueKey='total_tokens',credits=false){
+  const byDay=new Map(), models=uniq(rs.map(r=>r.model||'Unknown'));
+  rs.forEach(r=>{const d=r.date,g=byDay.get(d)||{models:new Map(),cached:0,fresh:0,output:0,total:0};const m=r.model||'Unknown';g.models.set(m,(g.models.get(m)||0)+n(r[valueKey]));g.cached+=n(r.cached_input_tokens);g.fresh+=n(r.fresh_input_tokens);g.output+=n(r.output_tokens);g.total+=n(r[valueKey]);byDay.set(d,g)});
+  const data=[...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0]));if(!data.length)return'<div class="empty">No data for this selection.</div>';
+  const W=940,H=270,L=58,R=10,T=10,B=40,pw=W-L-R,ph=H-T-B,max=Math.max(...data.map(x=>x[1].total),1),step=pw/data.length,bw=Math.min(58,step*.68),ticks=svgYTicks(max);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  ticks.forEach(v=>{const y=T+ph-v/max*ph;svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${y}" y2="${y}"/><text class="axis-label" x="${L-8}" y="${y+3}" text-anchor="end">${credits?fmtCredits(v):fmt(v)}</text>`});
+  data.forEach(([d,g],i)=>{const x=L+i*step+(step-bw)/2;let y=T+ph;const modelEntries=[...g.models.entries()].sort((a,b)=>b[1]-a[1]);modelEntries.forEach(([m,v])=>{const h=v/max*ph;y-=h;svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(h,.6)}" fill="${modelColor(m)}" rx="1"/>`});
+    const items=credits?[{label:'Estimated credits',value:fmtCredits(g.total),color:'var(--purple)'},...modelEntries.map(([m,v])=>({label:m,value:fmtCredits(v),color:modelColor(m)}))]:[{label:'Total',value:fmtExact(g.total),color:'#5f6b78'},{label:'Cached input',value:fmtExact(g.cached),color:'#159a8c'},{label:'Fresh input',value:fmtExact(g.fresh),color:'#ee8726'},{label:'Output',value:fmtExact(g.output),color:'#e85d9e'},...modelEntries.map(([m,v])=>({label:m,value:fmtExact(v),color:modelColor(m)}))];
+    svg+=`<rect x="${L+i*step}" y="${T}" width="${step}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/><text class="axis-label" x="${L+i*step+step/2}" y="${H-14}" text-anchor="middle">${axisDate(d)}</text>`;
+  });
+  svg+='</svg>';return svg+legend(models,modelColor)
+}
+function lineChart(rs,keyFn,valueFn,colorFn,maxSeries=5,valueFmt=fmtExact){
+  const dates=uniq(rs.map(r=>r.date)).sort(), seriesMap=new Map();rs.forEach(r=>{const k=keyFn(r)||'Unknown',d=r.date;if(!seriesMap.has(k))seriesMap.set(k,new Map());seriesMap.get(k).set(d,(seriesMap.get(k).get(d)||0)+valueFn(r))});
+  let series=[...seriesMap.entries()].map(([k,m])=>[k,m,[...m.values()].reduce((a,b)=>a+b,0)]).sort((a,b)=>b[2]-a[2]);if(series.length>maxSeries){const top=series.slice(0,maxSeries-1),rest=series.slice(maxSeries-1),other=new Map();rest.forEach(([,m])=>m.forEach((v,d)=>other.set(d,(other.get(d)||0)+v)));series=[...top,['Other',other,[...other.values()].reduce((a,b)=>a+b,0)]]}
+  if(!dates.length||!series.length)return'<div class="empty">No data for this selection.</div>';
+  const W=760,H=245,L=52,R=14,T=14,B=34,pw=W-L-R,ph=H-T-B,max=Math.max(...series.flatMap(([,m])=>dates.map(d=>m.get(d)||0)),1),ticks=svgYTicks(max),x=(d,i)=>dates.length===1?L+pw/2:L+i*pw/(dates.length-1),y=v=>T+ph-v/max*ph;
+  let svg=`<svg viewBox="0 0 ${W} ${H}">`;ticks.forEach(v=>{svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="axis-label" x="${L-7}" y="${y(v)+3}" text-anchor="end">${fmt(v)}</text>`});
+  series.forEach(([name,m])=>{const pts=dates.map((d,i)=>`${x(d,i)},${y(m.get(d)||0)}`).join(' ');svg+=`<polyline points="${pts}" fill="none" stroke="${colorFn(name)}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;dates.forEach((d,i)=>{const v=m.get(d)||0;svg+=`<circle cx="${x(d,i)}" cy="${y(v)}" r="2.8" fill="${colorFn(name)}"/>`})});
+  dates.forEach((d,i)=>{const left=dates.length===1?L:L+(i===0?0:(i-.5)*pw/(dates.length-1)),right=dates.length===1?W-R:L+(i===dates.length-1?dates.length-1:(i+.5))*pw/(dates.length-1),items=series.map(([name,m])=>({label:name,value:valueFmt(m.get(d)||0),color:colorFn(name)}));svg+=`<rect x="${left}" y="${T}" width="${Math.max(1,right-left)}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/>`;if(dates.length<=9||i===0||i===dates.length-1||i%Math.ceil(dates.length/7)===0)svg+=`<text class="axis-label" x="${x(d,i)}" y="${H-10}" text-anchor="middle">${axisDate(d)}</text>`});svg+='</svg>';return svg+legend(series.map(s=>s[0]),colorFn)
+}
+function dailyBars(rs,valueFn,color='var(--blue)',valueLabel=''){const m=new Map();rs.forEach(r=>m.set(r.date,(m.get(r.date)||0)+valueFn(r)));const data=[...m.entries()].sort((a,b)=>a[0].localeCompare(b[0]));if(!data.length)return'<div class="empty">No data for this selection.</div>';const W=760,H=245,L=52,R=14,T=14,B=34,pw=W-L-R,ph=H-T-B,max=Math.max(...data.map(x=>x[1]),1),step=pw/data.length,bw=Math.min(54,step*.62),ticks=svgYTicks(max);let svg=`<svg viewBox="0 0 ${W} ${H}">`;ticks.forEach(v=>{const y=T+ph-v/max*ph;svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${y}" y2="${y}"/><text class="axis-label" x="${L-7}" y="${y+3}" text-anchor="end">${fmt(v)}</text>`});data.forEach(([d,v],i)=>{const h=v/max*ph,x=L+i*step+(step-bw)/2,y=T+ph-h;svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${Math.max(h,.7)}" rx="5" fill="${color}" data-tip-json="${tipJson(axisDate(d),[{label:valueLabel||'Value',value:fmtExact(v),color}])}"/><text class="axis-label" x="${L+i*step+step/2}" y="${H-10}" text-anchor="middle">${axisDate(d)}</text>`});return svg+'</svg>'}
+function modelPill(model){return`<span class="model-pill" style="--pill-color:${modelColor(model)}">${esc(model||'Unknown')}</span>`}
+function mini(label,value,sub=''){return`<div class="mini"><div class="m-label">${esc(label)}</div><div class="m-value">${esc(value)}</div>${sub?`<div class="m-sub">${esc(sub)}</div>`:''}</div>`}
+
+const lifecycle=new Map();rows.forEach(r=>{const id=r.session_id||r.thread_id;if(!id)return;const st=r.thread_start_local||r.timestamp_local||'',la=r.thread_latest_local||r.timestamp_local||'',g=lifecycle.get(id)||{start:'',latest:''};if(st&&(!g.start||st<g.start))g.start=st;if(la&&(!g.latest||la>g.latest))g.latest=la;lifecycle.set(id,g)});
+let sortState={key:'total',dir:-1};
+function sessionTable(rs,ts){const by=new Map();rs.forEach(r=>{const id=r.session_id||r.thread_id;if(!id)return;const g=by.get(id)||{id,name:r.session_name||r.thread_name||id,models:new Map(),agentThreads:new Set(),responses:0,fresh:0,cached:0,output:0,total:0,credits:0,pricedTokens:0,compactions:0};g.responses++;g.fresh+=n(r.fresh_input_tokens);g.cached+=n(r.cached_input_tokens);g.output+=n(r.output_tokens);g.total+=n(r.total_tokens);g.credits+=n(r.estimated_credits);if(String(r.credit_rate_status||'').startsWith('priced'))g.pricedTokens+=n(r.total_tokens);if(String(r.is_compaction)==='true')g.compactions++;g.models.set(r.model||'Unknown',(g.models.get(r.model||'Unknown')||0)+n(r.total_tokens));if(r.agent_type==='Subagent')g.agentThreads.add(r.thread_id);by.set(id,g)});
+  const turnBy=new Map();ts.forEach(t=>{const id=t.session_id||t.thread_id;if(!turnBy.has(id))turnBy.set(id,[]);turnBy.get(id).push(t)});
+  let data=[...by.values()].map(g=>{const lc=lifecycle.get(g.id)||{},tr=turnBy.get(g.id)||[],top=[...g.models.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||'Unknown';return{...g,start:lc.start||'',latest:lc.latest||'',topModel:top,agents:g.agentThreads.size,turns:tr.length,duration:tr.reduce((a,t)=>a+n(t.duration_ms),0),failures:tr.filter(t=>['failed','aborted'].includes(t.status)).length,maxContext:Math.max(0,...tr.map(t=>n(t.context_utilization_pct))),creditCoverage:g.total?g.pricedTokens/g.total*100:0}});
+  const val=(x,k)=>({session:x.name,start:x.start,latest:x.latest,model:x.topModel,agents:x.agents,turns:x.turns,responses:x.responses,compactions:x.compactions,credits:x.credits,creditCoverage:x.creditCoverage,fresh:x.fresh,cached:x.cached,output:x.output,total:x.total,duration:x.duration,maxContext:x.maxContext,failures:x.failures})[k];data.sort((a,b)=>{let x=val(a,sortState.key),y=val(b,sortState.key);if(typeof x==='string')return sortState.dir*x.localeCompare(y);return sortState.dir*(n(x)-n(y))});
+  const cols=[['session','Session',''],['start','Start',''],['latest','Latest update',''],['model','Top model',''],['agents','Agents','num'],['turns','Turns','num'],['responses','Responses','num'],['compactions','Compacts','num'],['credits','Est. credits','num'],['creditCoverage','Credit cov.','num'],['fresh','Fresh input','num'],['cached','Cached input','num'],['output','Output','num'],['total','Total','num'],['duration','Turn time','num'],['maxContext','Max ctx','num'],['failures','Failed','num']];
+  const head=cols.map(([k,l,c])=>`<th class="sortable ${c}" data-sort="${k}">${l}<span class="sort-arrow">${sortState.key===k?(sortState.dir<0?'▼':'▲'):''}</span></th>`).join('');const body=data.map(x=>`<tr><td title="${esc(x.name)}">${esc(x.name.length>62?x.name.slice(0,59)+'…':x.name)}</td><td>${fmtDate(x.start,true)}</td><td>${fmtDate(x.latest,true)}</td><td>${modelPill(x.topModel)}</td><td class="num">${x.agents}</td><td class="num">${x.turns}</td><td class="num">${fmtExact(x.responses)}</td><td class="num">${fmtExact(x.compactions)}</td><td class="num">${x.creditCoverage?fmtCredits(x.credits):'—'}</td><td class="num">${pct(x.creditCoverage)}</td><td class="num">${fmt(x.fresh)}</td><td class="num">${fmt(x.cached)}</td><td class="num">${fmt(x.output)}</td><td class="num"><b>${fmt(x.total)}</b></td><td class="num">${fmtMs(x.duration)}</td><td class="num">${x.maxContext?pct(x.maxContext):'—'}</td><td class="num">${x.failures}</td></tr>`).join('');return data.length?`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`:'<div class="empty">No sessions for this selection.</div>'}
+function render(){
+  const state=filterState(),rs=filteredRows(state),ts=filteredTurns(state),as=filteredActivities(state);if(!rs.length){$('content').innerHTML='<div class="panel empty">No token records match these filters.</div>';return}
+  const total=sum(rs,'total_tokens'),fresh=sum(rs,'fresh_input_tokens'),cached=sum(rs,'cached_input_tokens'),output=sum(rs,'output_tokens'),input=sum(rs,'input_tokens'),reason=sum(rs,'reasoning_output_tokens'),credits=sum(rs,'estimated_credits'),sessions=new Set(rs.map(r=>r.session_id||r.thread_id)).size,threads=new Set(rs.map(r=>r.thread_id)).size,sub=sum(rs.filter(r=>r.agent_type==='Subagent'),'total_tokens'),comp=rs.filter(r=>String(r.is_compaction)==='true'),priced=sum(rs.filter(r=>String(r.credit_rate_status||'').startsWith('priced')),'total_tokens'),creditCoverage=total?priced/total*100:0;
+  const models=group(rs,'model'),agents=group(rs,roleLabel),effort=group(rs,'reasoning_effort'),volume=groupCount(rs,roleLabel),compTokens=sum(comp,'total_tokens'),compCredits=sum(comp,'estimated_credits');
+  const inputs=rs.map(r=>n(r.input_tokens)).filter(Boolean),dur=ts.map(t=>n(t.duration_ms)).filter(Boolean),ttft=ts.map(t=>n(t.time_to_first_token_ms)).filter(Boolean),context=ts.map(t=>n(t.context_utilization_pct)).filter(Boolean),failed=ts.filter(t=>['failed','aborted'].includes(t.status)).length,amplification=fresh?input/fresh:0;
+  const toolCalls=as.filter(a=>a.activity_type==='tool'),skills=as.filter(a=>a.activity_type==='skill'),plugins=as.filter(a=>a.activity_type==='plugin'),patchLines=sum(toolCalls,'lines_changed');
+  const cfgNames=configuredAgents.map(a=>a.name).filter(Boolean),selectedRoles=new Set(rs.map(roleLabel).map(roleKey)),allRoles=new Set(rows.map(roleLabel).map(roleKey));const cfgStatus=cfgNames.map(name=>[name,selectedRoles.has(roleKey(name))?'used':allRoles.has(roleKey(name))?'range':'never']);
+  const rateSel=limits.filter(l=>(!state.from||l.date>=state.from)&&(!state.to||l.date<=state.to)&&(!state.model||!l.model||l.model===state.model)),latestRate=rateSel.slice().sort((a,b)=>String(b.timestamp_utc).localeCompare(String(a.timestamp_utc)))[0],maxPrimary=Math.max(0,...rateSel.map(x=>n(x.primary_used_pct))),maxSecondary=Math.max(0,...rateSel.map(x=>n(x.secondary_used_pct)));
+  const creditByModel=group(rs,'model','estimated_credits'),creditByAgent=group(rs,roleLabel,'estimated_credits');
+  const toolCats=toolCalls.concat(plugins).filter((x,i,a)=>x.activity_type==='tool'||a.findIndex(y=>y.activity_type==='plugin'&&y.call_id===x.call_id&&y.plugin_name===x.plugin_name)===i);
+  const toolCategoryCount=groupCount(toolCats,a=>a.activity_type==='plugin'?(a.plugin_name||a.tool_category):(a.tool_category||a.tool_name));
+  const skillCount=groupCount(skills,'skill_name');
+  $('content').innerHTML=`
+    <div class="kpis">
+      ${kpi('Total tokens',fmt(total),`${fmtExact(rs.length)} model responses`,modelColor(models[0]?.[0]))}
+      ${kpi('Estimated credits',fmtCredits(credits),`${creditCoverage.toFixed(1)}% token coverage`,creditCoverage<95?'var(--amber)':'var(--green)',creditCoverage<95)}
+      ${kpi('Fresh input',fmt(fresh),`${pct(input?fresh/input*100:0)} of input`,'var(--orange)')}
+      ${kpi('Cached input',fmt(cached),`${pct(input?cached/input*100:0)} cache share`,'var(--teal)')}
+      ${kpi('Output',fmt(output),`${fmt(reason)} reasoning subset`,'var(--pink)')}
+      ${kpi('Sessions',fmtExact(sessions),`${fmtExact(threads)} threads`,'var(--purple)')}
+      ${kpi('Turns',fmtExact(ts.length),`${failed} failed / aborted`,'var(--blue)')}
+      ${kpi('Subagent share',pct(total?sub/total*100:0),`${fmtExact(comp.length)} compaction responses`,'var(--green)')}
+    </div>
+
+    <div class="section-title"><h2>Token usage</h2><p>Dedicated colours stay consistent for each model and agent throughout the dashboard.</p></div>
+    <div class="grid-2">
+      <div class="panel"><h3>Daily token mix</h3><div class="desc">Stacked by model. Hover a day to see cached input, fresh input, output and the model split.</div><div class="chart">${dailyModelBars(rs)}</div></div>
+      <div class="panel"><h3>Models</h3><div class="desc">Total tokens processed by the model recorded on each response.</div>${hbars(models,total,modelColor,12)}</div>
+    </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Agents / roles</h3><div class="desc">Usage is grouped by stable role; Codex nicknames are intentionally ignored here.</div>${hbars(agents,total,agentColor,12)}
+        <div class="agent-summary"><span><span class="dot" style="background:var(--green)"></span> Used in range</span><span><span class="dot" style="background:var(--amber)"></span> Used outside range</span><span><span class="dot" style="background:var(--pink)"></span> Never observed</span><span>${configuredAgents.length} configured</span></div>
+        <div class="agent-pills">${cfgStatus.map(([name,status])=>`<span class="agent-pill ${status}" title="${status==='used'?'Used in selected range':status==='range'?'Observed in collected history, not selected range':'Not observed in collected history'}">${esc(name)}</span>`).join('')}</div>
+      </div>
+      <div class="panel"><h3>Reasoning effort</h3><div class="desc">Total token traffic grouped by recorded turn effort.</div>${hbars(effort,total,()=> 'var(--purple)',10)}</div>
+    </div>
+
+    <div class="section-title"><h2>Estimated credit usage</h2><p>Current Codex token-based Business rate card. Estimates exclude unpriced model/tier combinations rather than guessing.</p></div>
+    <div class="grid-3">
+      <div class="panel span-2"><h3>Estimated credits by day</h3><div class="desc">Stacked by model using the same dedicated model colours.</div><div class="chart">${dailyModelBars(rs,'estimated_credits',true)}</div></div>
+      <div class="panel"><h3>Credits by model</h3><div class="desc">Estimated token-based credits for models with a published rate.</div>${hbars(creditByModel,credits,modelColor,12,fmtCredits)}</div>
+    </div>
+    <div class="grid-2 equal mt"><div class="panel"><h3>Credits by agent</h3><div class="desc">Estimated credits attributed to the role recorded on each response.</div>${hbars(creditByAgent,credits,agentColor,12,fmtCredits)}</div><div class="panel"><h3>Estimate coverage</h3><div class="desc">Coverage indicates how much token volume had a published rate that could be applied.</div>${mini('Priced token coverage',pct(creditCoverage),`${fmt(total-priced)} tokens excluded`)}<div class="note mt">Cache writes are not charged by Codex. Reasoning is already included inside output tokens. Fast/priority pricing is only applied when the collector can identify the service tier and has a public multiplier for that model.</div></div></div>
+
+    <div class="section-title"><h2>Useful insights</h2><p>Context pressure, compaction, performance, reliability and agent efficiency.</p></div>
+    <div class="panel"><div class="insight-cards">
+      ${mini('Avg input / response',fmt(input/rs.length),'Context processed per model request')}
+      ${mini('P95 input / response',fmt(percentile(inputs,.95)),'Large-request context pressure')}
+      ${mini('Context amplification',`${amplification.toFixed(1)}×`,'Input processed ÷ fresh input')}
+      ${mini('Compaction overhead',fmt(compTokens),`${fmtCredits(compCredits)} estimated credits`)}
+      ${mini('P95 turn duration',fmtMs(percentile(dur,.95)),`${fmtMs(dur.length?dur.reduce((a,b)=>a+b,0)/dur.length:0)} average`)}
+      ${mini('P95 time to first token',fmtMs(percentile(ttft,.95)),`${fmtMs(ttft.length?ttft.reduce((a,b)=>a+b,0)/ttft.length:0)} average`)}
+      ${mini('Failed / aborted turns',pct(ts.length?failed/ts.length*100:0),`${failed} of ${ts.length}`)}
+      ${mini('P95 context utilisation',context.length?pct(percentile(context,.95)):'—','Max request input ÷ model window')}
+      ${mini('Tool calls',fmtExact(toolCalls.length),`${plugins.length} plugin calls detected`)}
+      ${mini('Skills used',fmtExact(skills.length),`${skillCount.length} distinct skills detected`)}
+      ${mini('Patch lines changed',fmtExact(patchLines),'Successful/observed apply_patch diffs')}
+      ${mini('Responses / turn',ts.length?(rs.length/ts.length).toFixed(1):'—','Model sampling density')}
+    </div></div>
+    <div class="grid-3 mt">
+      <div class="panel"><h3>Agent efficiency</h3><div class="desc">Tokens per response by role. Lower is not automatically better; task complexity differs.</div>${hbars(group(rs,roleLabel,'total_tokens').map(([a,v])=>[a,v/Math.max(1,rs.filter(r=>roleLabel(r)===a).length)]),0,agentColor,12,fmt)}</div>
+      <div class="panel"><h3>Response volume</h3><div class="desc">Number of model responses by role.</div>${hbars(volume,rs.length,agentColor,12,fmtExact)}</div>
+      <div class="panel"><h3>Rate-limit pressure</h3><div class="desc">Observed account-level rate-limit telemetry when Codex persisted it.</div>${latestRate?`${mini('Latest primary',pct(latestRate.primary_used_pct),`Max in range ${pct(maxPrimary)}`)}<div style="height:8px"></div>${mini('Latest secondary',pct(latestRate.secondary_used_pct),`Max in range ${pct(maxSecondary)}`)}`:'<div class="empty">No rate-limit telemetry observed.</div>'}</div>
+    </div>
+
+    <div class="section-title"><h2>Product activity</h2><p>Views inspired by the Codex/OpenAI analytics screens, using signals available in local rollout files.</p></div>
+    <div class="grid-2 equal">
+      <div class="panel"><h3>Tokens by model</h3><div class="desc">Model token traffic over time.</div><div class="chart">${lineChart(rs,r=>r.model||'Unknown',r=>n(r.total_tokens),modelColor,6)}</div></div>
+      <div class="panel"><h3>Turns by model</h3><div class="desc">Completed, failed, aborted and in-progress turn records grouped by model.</div><div class="chart">${lineChart(ts,t=>t.model||'Unknown',()=>1,modelColor,6)}</div></div>
+    </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Patch lines changed</h3><div class="desc">Approximate additions + deletions from successful/observed apply_patch calls; not a Git diff of the final repository.</div><div class="chart">${dailyBars(toolCalls,a=>n(a.lines_changed),'var(--blue)','Patch lines changed')}</div></div>
+      <div class="panel"><h3>Tool activity</h3><div class="desc">Top tool/plugin categories over time.</div><div class="chart">${lineChart(toolCats,a=>a.activity_type==='plugin'?(a.plugin_name||a.tool_category):(a.tool_category||a.tool_name),()=>1,x=>COLOR_POOL[hash('tool:'+x)%COLOR_POOL.length],5)}</div></div>
+    </div>
+    <div class="panel mt"><h3>Skills used</h3><div class="desc">Best-effort detection from injected &lt;skill&gt; fragments, skills:// reads and local SKILL.md reads persisted in rollouts.</div><div class="chart">${skills.length?lineChart(skills,s=>s.skill_name||'Unknown',()=>1,x=>COLOR_POOL[hash('skill:'+x)%COLOR_POOL.length],5):'<div class="empty">No attributable skill invocations were found in the collected rollouts. Re-run the updated collector over the period you want to backfill. Codex does not currently persist a first-class local skill-invocation event, so this view remains best-effort.</div>'}</div></div>
+
+    <div class="section-title"><h2>Highest-usage sessions</h2><p>Click any column heading to sort. Session lifecycle dates come from the full collected history, not only the current filter.</p></div>
+    <div class="panel" id="sessionPanel">${sessionTable(rs,ts)}</div>
+  `;
+  bindSort();
+  $('sourceNote').textContent=`Showing ${rs.length.toLocaleString()} of ${rows.length.toLocaleString()} responses · ${ts.length.toLocaleString()} turns · ${as.length.toLocaleString()} activities in current filters`;
+  $('updatedNote').textContent=meta.generated_at?`Updated ${fmtDate(meta.generated_at,true)} · credit rate ${meta.credit_rate_as_of||'current'}`:'';
+}
+function bindSort(){document.querySelectorAll('th[data-sort]').forEach(th=>th.addEventListener('click',()=>{const k=th.dataset.sort;if(sortState.key===k)sortState.dir*=-1;else{sortState.key=k;sortState.dir=k==='session'||k==='model'?1:-1}const panel=$('sessionPanel');if(panel)panel.innerHTML=sessionTable(filteredRows(),filteredTurns());bindSort()}))}
+const tip=$('tooltip');
+function renderTip(raw){try{const data=JSON.parse(raw||'{}'),items=Array.isArray(data.items)?data.items:[];tip.innerHTML=`${data.title?`<div class="tip-title">${esc(data.title)}</div>`:''}${items.map((item,i)=>`${i&&item.divider?'<div class="tip-divider"></div>':''}<div class="tip-row"><span class="tip-swatch" style="--tip-color:${escAttr(item.color||'var(--muted)')}"></span><span>${esc(item.label||'')}</span><span class="tip-value">${esc(item.value??'')}</span></div>`).join('')}`;return true}catch{return false}}
+document.addEventListener('mousemove',e=>{const t=e.target.closest?.('[data-tip-json],[data-tip]');if(!t){tip.style.display='none';return}if(t.hasAttribute('data-tip-json'))renderTip(t.getAttribute('data-tip-json'));else tip.textContent=t.getAttribute('data-tip');tip.style.display='block';let x=e.clientX+14,y=e.clientY+14;tip.style.left=x+'px';tip.style.top=y+'px';const r=tip.getBoundingClientRect();if(r.right>innerWidth-8)tip.style.left=(e.clientX-r.width-14)+'px';if(r.bottom>innerHeight-8)tip.style.top=(e.clientY-r.height-14)+'px'});document.addEventListener('mouseleave',()=>tip.style.display='none');
+let renderRaf=0;function queueRender(){cancelAnimationFrame(renderRaf);renderRaf=requestAnimationFrame(render)}
+const filterIds=new Set(['fromDate','toDate','modelFilter','agentFilter','effortFilter','projectFilter']);document.querySelector('.filter-row').addEventListener('input',e=>{if(filterIds.has(e.target.id))queueRender()});document.querySelector('.filter-row').addEventListener('change',e=>{if(filterIds.has(e.target.id))queueRender()});$('resetBtn').addEventListener('click',()=>{initFilters();queueRender()});initFilters();render();
+})();
+</script>
+</body>
+</html>
