@@ -567,6 +567,15 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                 "api_coverage_pct": (int(total_row.get("priced_tokens") or 0) / total_tokens * 100.0) if total_tokens else 0.0,
             }
             where, values = where_for(filters)
+            credit_row = conn.execute(
+                f"""SELECT COALESCE(SUM(estimated_credits),0) estimated_credits,
+                           COALESCE(SUM(CASE WHEN credit_rate_status LIKE 'priced%' THEN total_tokens ELSE 0 END),0) credit_priced_tokens
+                      FROM responses{where}""",
+                values,
+            ).fetchone()
+            summary["estimated_credits"] = float(credit_row["estimated_credits"] or 0)
+            summary["credit_priced_tokens"] = int(credit_row["credit_priced_tokens"] or 0)
+            summary["credit_coverage_pct"] = (summary["credit_priced_tokens"] / total_tokens * 100.0) if total_tokens else 0.0
             long_count = conn.execute(
                 f"SELECT COUNT(*) FROM responses{where} {'AND' if where else 'WHERE'} input_tokens>?",
                 [*values, int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)],
