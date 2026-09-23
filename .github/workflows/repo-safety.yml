@@ -23,6 +23,8 @@ jobs:
         run: |
           mkdir -p /tmp/codex-empty
           python collect_codex_usage.py --days 1 --codex-home /tmp/codex-empty --output-dir /tmp/codex-usage-smoke
+      - name: Test legacy token-count telemetry
+        run: python scripts/check_legacy_token_count.py
       - name: Check dashboard JavaScript syntax
         run: node scripts/check_dashboard_js.mjs
       - name: Check tracked files for local telemetry and credentials
