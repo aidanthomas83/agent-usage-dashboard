@@ -25,6 +25,8 @@ jobs:
           python collect_codex_usage.py --days 1 --codex-home /tmp/codex-empty --output-dir /tmp/codex-usage-smoke
       - name: Test legacy token-count telemetry
         run: python scripts/check_legacy_token_count.py
+      - name: Test Codex skill activity detection
+        run: python scripts/check_skill_activity.py
       - name: Test tab-specific SQLite queries
         run: python scripts/check_server_queries.py
       - name: Smoke-test local API server
