@@ -45,7 +45,7 @@
 .data-note{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--muted);font-size:10.5px;line-height:1.5}
 .panel-tight{padding:12px 14px}.panel-tight .hbars{gap:7px}
 .kpis.compact{grid-template-columns:repeat(6,minmax(0,1fr))}
-.kpis.subscription-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+.kpis.subscription-kpis{grid-template-columns:repeat(5,minmax(0,1fr))}
 .sessions-note{margin-bottom:10px;color:var(--muted);font-size:10px}
 
 @media(max-width:1100px){.token-detail-grid{grid-template-columns:1fr}.insight-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.activity-grid{grid-template-columns:1fr}.kpis.compact{grid-template-columns:repeat(3,1fr)}}
