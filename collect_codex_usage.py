@@ -178,6 +178,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--codex-home", type=Path, default=default_home, help=f"Codex data directory (default: {default_home}).")
     p.add_argument("--output-dir", type=Path, default=here / "data", help="Output directory (default: ./data).")
     p.add_argument("--scan-all", action="store_true", help="Scan every rollout rather than narrowing by mtime.")
+    p.add_argument("--sqlite-only", action="store_true", help="Incrementally update only SQLite for the selected dates; skip CSV exports.")
     p.add_argument("--verbose", action="store_true", help="Print malformed/skipped details.")
     return p.parse_args()
 
@@ -1390,6 +1391,113 @@ def write_sqlite_snapshot(
     os.replace(tmp, path)
 
 
+def sqlite_insert_rows(
+    conn: sqlite3.Connection,
+    table: str,
+    fields: list[str],
+    rows: list[dict[str, Any]],
+    ints: set[str],
+    floats: set[str],
+) -> None:
+    if not rows:
+        return
+    placeholders = ",".join("?" for _ in fields)
+    column_names = ",".join(f'"{field}"' for field in fields)
+    values = [
+        [row.get(field, 0 if field in ints or field in floats else "") for field in fields]
+        for row in rows
+    ]
+    conn.executemany(
+        f'INSERT INTO "{table}" ({column_names}) VALUES ({placeholders})',
+        values,
+    )
+
+
+def update_sqlite_range(
+    path: Path,
+    selected: set[str],
+    records: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    activities: list[dict[str, Any]],
+    limits: list[dict[str, Any]],
+    agents: list[dict[str, str]],
+    skills: list[dict[str, str]],
+    metadata_updates: dict[str, Any],
+    daily_fields: list[str],
+) -> dict[str, Any]:
+    """Replace only selected date partitions in an existing SQLite database."""
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    daily = daily_summary(records, turns, activities)
+    conn = sqlite3.connect(path, timeout=60)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout=60000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("BEGIN IMMEDIATE")
+
+        date_values = sorted(selected)
+        placeholders = ",".join("?" for _ in date_values)
+        for table in ("responses", "turns", "activities", "rate_limits", "daily"):
+            conn.execute(f'DELETE FROM "{table}" WHERE date IN ({placeholders})', date_values)
+
+        sqlite_insert_rows(conn, "responses", RECORD_FIELDS, records, RECORD_INT_FIELDS, RECORD_FLOAT_FIELDS)
+        sqlite_insert_rows(conn, "turns", TURN_FIELDS, turns, TURN_INT_FIELDS, TURN_FLOAT_FIELDS)
+        sqlite_insert_rows(conn, "activities", ACTIVITY_FIELDS, activities, ACTIVITY_INT_FIELDS, set())
+        sqlite_insert_rows(conn, "rate_limits", LIMIT_FIELDS, limits, LIMIT_INT_FIELDS, LIMIT_FLOAT_FIELDS)
+        sqlite_insert_rows(conn, "daily", daily_fields, daily, set(), {
+            "cache_hit_pct", "estimated_credits", "credit_coverage_pct",
+            "api_equivalent_cost_usd", "api_cost_coverage_pct",
+        })
+
+        conn.execute("DELETE FROM configured_agents")
+        sqlite_insert_rows(conn, "configured_agents", AGENT_FIELDS, agents, set(), set())
+        conn.execute("DELETE FROM configured_skills")
+        sqlite_insert_rows(conn, "configured_skills", SKILL_FIELDS, skills, set(), set())
+
+        counts = conn.execute(
+            """SELECT COUNT(*) responses,
+                      COUNT(DISTINCT thread_id) threads,
+                      MIN(date) first_date,
+                      MAX(date) last_date,
+                      COALESCE(SUM(total_tokens),0) total_tokens,
+                      COALESCE(SUM(CASE WHEN credit_rate_status LIKE 'priced%' THEN total_tokens ELSE 0 END),0) priced_tokens
+                 FROM responses"""
+        ).fetchone()
+        turn_count = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+        activity_count = conn.execute("SELECT COUNT(*) FROM activities").fetchone()[0]
+
+        metadata_updates.update({
+            "dataset_responses": int(counts["responses"] or 0),
+            "dataset_turns": int(turn_count or 0),
+            "dataset_activities": int(activity_count or 0),
+            "dataset_first_date": counts["first_date"],
+            "dataset_last_date": counts["last_date"],
+            "configured_agents": len(agents),
+            "configured_skills": len(skills),
+            "credit_coverage_pct": round(
+                (float(counts["priced_tokens"] or 0) / float(counts["total_tokens"] or 1) * 100.0)
+                if counts["total_tokens"] else 0.0,
+                4,
+            ),
+        })
+        for key, value in metadata_updates.items():
+            conn.execute(
+                "INSERT INTO metadata(key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(key), json.dumps(value, ensure_ascii=False, separators=(",", ":"))),
+            )
+        conn.commit()
+        return metadata_updates
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def main() -> int:
     args=parse_args()
     local_tz=datetime.now().astimezone().tzinfo
@@ -1406,8 +1514,54 @@ def main() -> int:
     daily_path=output_dir/"codex_usage_daily.csv"; database_path=output_dir/"codex_usage.sqlite"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"; skills_path=output_dir/"codex_skills.csv"
 
     selected={d.isoformat() for d in dates}; earliest=min(dates); earliest_local=datetime.combine(earliest,datetime.min.time(),tzinfo=local_tz)
+    print(f"Preparing {len(selected)} day refresh…", flush=True)
     names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); skills=load_configured_skills(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
+    print(f"Scanning {len(rollouts):,} rollout file(s)…", flush=True)
 
+    rebuilt_records=[]; rebuilt_turns=[]; rebuilt_activity=[]; rebuilt_limits=[]; files_with_usage=0
+    total_rollouts=len(rollouts)
+    progress_every=max(1,total_rollouts//10) if total_rollouts else 1
+    for idx,path in enumerate(rollouts,1):
+        r,t,a,l=parse_rollout(path,selected,local_tz,names,codex_home,args.verbose)
+        if r or t or a: files_with_usage+=1
+        rebuilt_records.extend(r); rebuilt_turns.extend(t); rebuilt_activity.extend(a); rebuilt_limits.extend(l)
+        if idx==total_rollouts or idx%progress_every==0:
+            print(f"Parsed {idx:,}/{total_rollouts:,} rollout file(s)…", flush=True)
+
+    rebuilt_records=dedupe_records(rebuilt_records)
+    rebuilt_turns=dedupe_turns(rebuilt_turns); rebuilt_turns=enrich_turns(rebuilt_turns,rebuilt_records)
+    rebuilt_activity=dedupe_activity(rebuilt_activity)
+    rebuilt_limits=dedupe_limits(rebuilt_limits)
+
+    daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","api_equivalent_cost_usd","api_cost_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
+
+    now=datetime.now(local_tz)
+    common_metadata={
+        "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),
+        "processed_dates":sorted(selected),"days_requested":len(dates),
+        "requested_from":min(selected),"requested_to":max(selected),
+        "rollout_files_scanned":len(rollouts),"rollout_files_with_selected_activity":files_with_usage,
+        "rebuilt_responses":len(rebuilt_records),
+        "credit_rate_as_of":CREDIT_RATE_AS_OF,"credit_rate_source":CREDIT_RATE_SOURCE,
+        "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
+        "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
+        "api_cost_note":"Counterfactual Standard OpenAI API token cost at today's rates. Includes cached-input and cache-write pricing plus documented >272K long-context multipliers. Excludes separate tool-call, web-search, container, storage, regional-processing, and other non-token API charges.",
+        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+    }
+
+    if args.sqlite_only and database_path.exists():
+        print("Updating selected SQLite date partitions…", flush=True)
+        metadata=update_sqlite_range(
+            database_path,selected,rebuilt_records,rebuilt_turns,rebuilt_activity,rebuilt_limits,
+            agents,skills,common_metadata,daily_fields,
+        )
+        print(f"Refresh complete: {len(rebuilt_records):,} responses, {len(rebuilt_turns):,} turns, {len(rebuilt_activity):,} activities.", flush=True)
+        return 0
+
+    if args.sqlite_only and not database_path.exists():
+        print("SQLite database does not exist yet; falling back to a full initial build.", flush=True)
+
+    print("Loading retained export history…", flush=True)
     existing_records=load_csv(records_path,RECORD_FIELDS,RECORD_INT_FIELDS,RECORD_FLOAT_FIELDS)
     existing_turns=load_csv(turns_path,TURN_FIELDS,TURN_INT_FIELDS,TURN_FLOAT_FIELDS)
     existing_activity=load_csv(activity_path,ACTIVITY_FIELDS,ACTIVITY_INT_FIELDS,set())
@@ -1417,12 +1571,6 @@ def main() -> int:
     retained_activity=[r for r in existing_activity if str(r.get("date") or "") not in selected]
     retained_limits=[r for r in existing_limits if str(r.get("date") or "") not in selected]
 
-    rebuilt_records=[]; rebuilt_turns=[]; rebuilt_activity=[]; rebuilt_limits=[]; files_with_usage=0
-    for path in rollouts:
-        r,t,a,l=parse_rollout(path,selected,local_tz,names,codex_home,args.verbose)
-        if r or t or a: files_with_usage+=1
-        rebuilt_records.extend(r); rebuilt_turns.extend(t); rebuilt_activity.extend(a); rebuilt_limits.extend(l)
-
     records=dedupe_records(retained_records+rebuilt_records)
     turns=dedupe_turns(retained_turns+rebuilt_turns); turns=enrich_turns(turns,records)
     activities=dedupe_activity(retained_activity+rebuilt_activity)
@@ -1430,10 +1578,9 @@ def main() -> int:
 
     write_csv_atomic(records_path,records,RECORD_FIELDS); write_csv_atomic(turns_path,turns,TURN_FIELDS); write_csv_atomic(activity_path,activities,ACTIVITY_FIELDS); write_csv_atomic(limits_path,limits,LIMIT_FIELDS); write_csv_atomic(agents_path,agents,AGENT_FIELDS); write_csv_atomic(skills_path,skills,SKILL_FIELDS)
     daily=daily_summary(records,turns,activities)
-    daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","api_equivalent_cost_usd","api_cost_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
     write_csv_atomic(daily_path,daily,daily_fields)
 
-    now=datetime.now(local_tz); priced_tokens=sum(to_int(r.get("total_tokens")) for r in records if str(r.get("credit_rate_status") or "").startswith("priced")); all_tokens=sum(to_int(r.get("total_tokens")) for r in records)
+    priced_tokens=sum(to_int(r.get("total_tokens")) for r in records if str(r.get("credit_rate_status") or "").startswith("priced")); all_tokens=sum(to_int(r.get("total_tokens")) for r in records)
     metadata={
         "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),"processed_dates":sorted(selected),"days_requested":len(dates),
         "requested_from":min(selected),"requested_to":max(selected),
