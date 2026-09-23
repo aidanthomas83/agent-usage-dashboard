@@ -871,10 +871,31 @@ def parse_rollout(
 
             # Explicitly injected skills can appear in the rollout as structured
             # <skill><name>...</name>...</skill> prompt fragments with no tool call.
-            # Extract only the skill name; do not persist the surrounding prompt.
+            # Newer Codex desktop builds can also persist concise activity text
+            # such as "Read Codebase Memory skill". Resolve display names to the
+            # configured skill identity so the inventory and usage status agree.
+            role = str(payload.get("role") or "").strip().lower()
             for fragment in iter_string_values(payload):
                 for match in SKILL_XML_RE.finditer(fragment):
                     stage_skill(match.group(1), f"skill-injected:{item_turn}:{match.group(1)}", item_turn, ts_utc, ctx_for_item)
+                for match in SKILL_URI_RE.finditer(fragment):
+                    uri_path = match.group(1).strip("/")
+                    parts = [p for p in uri_path.split("/") if p]
+                    skill = parts[-1] if parts else uri_path
+                    stage_skill(skill, f"skill-uri:{item_turn}:{skill}", item_turn, ts_utc, ctx_for_item)
+                for match in SKILL_PATH_RE.finditer(fragment):
+                    skill = clean_skill_name(match.group(1))
+                    stage_skill(skill, f"skill-path:{item_turn}:{skill}", item_turn, ts_utc, ctx_for_item)
+                if role != "user":
+                    for match in SKILL_ACTION_RE.finditer(fragment):
+                        stage_skill(
+                            match.group(1),
+                            f"skill-summary:{item_turn}:{match.group(1)}",
+                            item_turn,
+                            ts_utc,
+                            ctx_for_item,
+                            require_configured=True,
+                        )
             if rt.lower() in {"skill", "skill_invocation"}:
                 stage_skill(payload.get("name") or payload.get("skill_name"), str(payload.get("id") or ""), item_turn, ts_utc, ctx_for_item)
 
