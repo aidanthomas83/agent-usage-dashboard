@@ -161,7 +161,7 @@ function render(){
         ${mini('Priced token coverage',pct(apiCoverage),`${fmt(total-apiPriced)} tokens excluded`)}
         <div style="height:8px"></div>
         ${mini('Long-context responses',fmtExact(apiLong),'Requests above 272K input tokens')}
-        <div class="note mt">Token-only counterfactual. Includes ordinary input, cached input, cache writes and documented long-context multipliers. `codex-auto-review` uses the GPT-5.4 API token price as a proxy. It does not include separately priced API tools such as web search, containers, storage, regional processing or other non-token charges.</div>
+        <div class="note mt">Token-only counterfactual. Includes ordinary input, cached input, cache writes and documented long-context multipliers. codex-auto-review uses the GPT-5.4 API token price as a proxy. It does not include separately priced API tools such as web search, containers, storage, regional processing or other non-token charges.</div>
       </div>
     </div>
 
