@@ -52,3 +52,5 @@
 @media(max-width:700px){.tabs{overflow:auto;flex-wrap:nowrap}.tab-btn{white-space:nowrap}.insight-grid{grid-template-columns:1fr}.kpis.compact,.kpis.subscription-kpis{grid-template-columns:repeat(2,1fr)}.pricing-head{display:block}.pricing-actions{margin-top:10px}.skill-summary{grid-template-columns:1fr 1fr}}
 
 .activity-chart-large{min-height:390px}.activity-chart-large svg{min-height:360px}
+
+.avg-line-swatch{display:inline-block;width:18px;height:0;border-top:2px dashed #b45309;vertical-align:middle}
