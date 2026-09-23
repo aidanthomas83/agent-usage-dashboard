@@ -114,19 +114,20 @@ function sessionTable(rs,ts){const by=new Map();rs.forEach(r=>{const id=r.sessio
   const head=cols.map(([k,l,c])=>`<th class="sortable ${c}" data-sort="${k}">${l}<span class="sort-arrow">${sortState.key===k?(sortState.dir<0?'▼':'▲'):''}</span></th>`).join('');const body=data.map(x=>`<tr><td title="${esc(x.name)}">${esc(x.name.length>62?x.name.slice(0,59)+'…':x.name)}</td><td>${fmtDate(x.start,true)}</td><td>${fmtDate(x.latest,true)}</td><td>${modelPill(x.topModel)}</td><td class="num">${x.agents}</td><td class="num">${x.turns}</td><td class="num">${fmtExact(x.responses)}</td><td class="num">${fmtExact(x.compactions)}</td><td class="num">${x.creditCoverage?fmtCredits(x.credits):'—'}</td><td class="num">${pct(x.creditCoverage)}</td><td class="num">${x.apiCoverage?fmtUsd(x.apiCost):'—'}</td><td class="num">${pct(x.apiCoverage)}</td><td class="num">${fmt(x.fresh)}</td><td class="num">${fmt(x.cached)}</td><td class="num">${fmt(x.output)}</td><td class="num"><b>${fmt(x.total)}</b></td><td class="num">${fmtMs(x.duration)}</td><td class="num">${x.maxContext?pct(x.maxContext):'—'}</td><td class="num">${x.failures}</td></tr>`).join('');return data.length?`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`:'<div class="empty">No sessions for this selection.</div>'}
 function render(){
   const state=filterState(),rs=filteredRows(state),ts=filteredTurns(state),as=filteredActivities(state);if(!rs.length){$('content').innerHTML='<div class="panel empty">No token records match these filters.</div>';return}
-  const total=sum(rs,'total_tokens'),fresh=sum(rs,'fresh_input_tokens'),cached=sum(rs,'cached_input_tokens'),output=sum(rs,'output_tokens'),input=sum(rs,'input_tokens'),reason=sum(rs,'reasoning_output_tokens'),credits=sum(rs,'estimated_credits'),sessions=new Set(rs.map(r=>r.session_id||r.thread_id)).size,threads=new Set(rs.map(r=>r.thread_id)).size,sub=sum(rs.filter(r=>r.agent_type==='Subagent'),'total_tokens'),comp=rs.filter(r=>String(r.is_compaction)==='true'),priced=sum(rs.filter(r=>String(r.credit_rate_status||'').startsWith('priced')),'total_tokens'),creditCoverage=total?priced/total*100:0;
+  const total=sum(rs,'total_tokens'),fresh=sum(rs,'fresh_input_tokens'),cached=sum(rs,'cached_input_tokens'),output=sum(rs,'output_tokens'),input=sum(rs,'input_tokens'),reason=sum(rs,'reasoning_output_tokens'),credits=sum(rs,'estimated_credits'),apiCost=sum(rs,'api_equivalent_cost_usd'),sessions=new Set(rs.map(r=>r.session_id||r.thread_id)).size,threads=new Set(rs.map(r=>r.thread_id)).size,sub=sum(rs.filter(r=>r.agent_type==='Subagent'),'total_tokens'),comp=rs.filter(r=>String(r.is_compaction)==='true'),priced=sum(rs.filter(r=>String(r.credit_rate_status||'').startsWith('priced')),'total_tokens'),creditCoverage=total?priced/total*100:0,apiPriced=sum(rs.filter(r=>String(r.api_cost_rate_status||'').startsWith('priced')),'total_tokens'),apiCoverage=total?apiPriced/total*100:0,apiLong=rs.filter(r=>String(r.api_long_context)==='true').length;
   const models=group(rs,'model'),agents=group(rs,roleLabel),effort=group(rs,'reasoning_effort'),volume=groupCount(rs,roleLabel),compTokens=sum(comp,'total_tokens'),compCredits=sum(comp,'estimated_credits');
   const inputs=rs.map(r=>n(r.input_tokens)).filter(Boolean),dur=ts.map(t=>n(t.duration_ms)).filter(Boolean),ttft=ts.map(t=>n(t.time_to_first_token_ms)).filter(Boolean),context=ts.map(t=>n(t.context_utilization_pct)).filter(Boolean),failed=ts.filter(t=>['failed','aborted'].includes(t.status)).length,amplification=fresh?input/fresh:0;
   const toolCalls=as.filter(a=>a.activity_type==='tool'),skills=as.filter(a=>a.activity_type==='skill'),plugins=as.filter(a=>a.activity_type==='plugin'),patchLines=sum(toolCalls,'lines_changed');
   const cfgNames=configuredAgents.map(a=>a.name).filter(Boolean),selectedRoles=new Set(rs.map(roleLabel).map(roleKey)),allRoles=new Set(rows.map(roleLabel).map(roleKey));const cfgStatus=cfgNames.map(name=>[name,selectedRoles.has(roleKey(name))?'used':allRoles.has(roleKey(name))?'range':'never']);
   const rateSel=limits.filter(l=>(!state.from||l.date>=state.from)&&(!state.to||l.date<=state.to)&&(!state.model||!l.model||l.model===state.model)),latestRate=rateSel.slice().sort((a,b)=>String(b.timestamp_utc).localeCompare(String(a.timestamp_utc)))[0],maxPrimary=Math.max(0,...rateSel.map(x=>n(x.primary_used_pct))),maxSecondary=Math.max(0,...rateSel.map(x=>n(x.secondary_used_pct)));
-  const creditByModel=group(rs,'model','estimated_credits'),creditByAgent=group(rs,roleLabel,'estimated_credits');
+  const creditByModel=group(rs,'model','estimated_credits'),creditByAgent=group(rs,roleLabel,'estimated_credits'),apiByModel=group(rs,'model','api_equivalent_cost_usd'),apiByAgent=group(rs,roleLabel,'api_equivalent_cost_usd');
   const toolCats=toolCalls.concat(plugins).filter((x,i,a)=>x.activity_type==='tool'||a.findIndex(y=>y.activity_type==='plugin'&&y.call_id===x.call_id&&y.plugin_name===x.plugin_name)===i);
   const toolCategoryCount=groupCount(toolCats,a=>a.activity_type==='plugin'?(a.plugin_name||a.tool_category):(a.tool_category||a.tool_name));
   const skillCount=groupCount(skills,'skill_name');
   $('content').innerHTML=`
     <div class="kpis">
       ${kpi('Total tokens',fmt(total),`${fmtExact(rs.length)} model responses`,modelColor(models[0]?.[0]))}
+      ${kpi('API-equivalent cost',fmtUsd(apiCost),`${apiCoverage.toFixed(1)}% coverage · today\'s Standard API rates`,'var(--green)',apiCoverage<95)}
       ${kpi('Estimated credits',fmtCredits(credits),`${creditCoverage.toFixed(1)}% token coverage`,creditCoverage<95?'var(--amber)':'var(--green)',creditCoverage<95)}
       ${kpi('Fresh input',fmt(fresh),`${pct(input?fresh/input*100:0)} of input`,'var(--orange)')}
       ${kpi('Cached input',fmt(cached),`${pct(input?cached/input*100:0)} cache share`,'var(--teal)')}
@@ -149,9 +150,24 @@ function render(){
       <div class="panel"><h3>Reasoning effort</h3><div class="desc">Total token traffic grouped by recorded turn effort.</div>${hbars(effort,total,()=> 'var(--purple)',10)}</div>
     </div>
 
-    <div class="section-title"><h2>Estimated credit usage</h2><p>Current Codex token-based Business rate card. Estimates exclude unpriced model/tier combinations rather than guessing.</p></div>
+    <div class="section-title"><h2>Subscription value · API-equivalent token cost</h2><p>What the selected usage would cost at today's Standard OpenAI API token rates (rate card as of ${esc(meta.api_price_as_of||'current')}). Historical usage is repriced at this current rate card.</p></div>
     <div class="grid-3">
-      <div class="panel span-2"><h3>Estimated credits by day</h3><div class="desc">Stacked by model using the same dedicated model colours.</div><div class="chart">${dailyModelBars(rs,'estimated_credits',true)}</div></div>
+      <div class="panel span-2"><h3>API-equivalent cost by day</h3><div class="desc">USD token cost by model using current Standard API rates.</div><div class="chart">${dailyModelBars(rs,'api_equivalent_cost_usd','usd')}</div></div>
+      <div class="panel"><h3>Cost by model</h3><div class="desc">Current-rate API-equivalent token spend by model.</div>${hbars(apiByModel,apiCost,modelColor,12,fmtUsd)}</div>
+    </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Cost by agent</h3><div class="desc">API-equivalent token cost attributed to each recorded agent role.</div>${hbars(apiByAgent,apiCost,agentColor,12,fmtUsd)}</div>
+      <div class="panel"><h3>API estimate coverage</h3><div class="desc">Coverage is the share of selected token volume that can be mapped to a published current API model price.</div>
+        ${mini('Priced token coverage',pct(apiCoverage),`${fmt(total-apiPriced)} tokens excluded`)}
+        <div style="height:8px"></div>
+        ${mini('Long-context responses',fmtExact(apiLong),'Requests above 272K input tokens')}
+        <div class="note mt">Token-only counterfactual. Includes ordinary input, cached input, cache writes and documented long-context multipliers. It does not include separately priced API tools such as web search, containers, storage, regional processing or other non-token charges.</div>
+      </div>
+    </div>
+
+    <div class="section-title"><h2>Estimated Codex credit usage</h2><p>Current Codex token-based Business rate card. Estimates exclude unpriced model/tier combinations rather than guessing.</p></div>
+    <div class="grid-3">
+      <div class="panel span-2"><h3>Estimated credits by day</h3><div class="desc">Stacked by model using the same dedicated model colours.</div><div class="chart">${dailyModelBars(rs,'estimated_credits','credits')}</div></div>
       <div class="panel"><h3>Credits by model</h3><div class="desc">Estimated token-based credits for models with a published rate.</div>${hbars(creditByModel,credits,modelColor,12,fmtCredits)}</div>
     </div>
     <div class="grid-2 equal mt"><div class="panel"><h3>Credits by agent</h3><div class="desc">Estimated credits attributed to the role recorded on each response.</div>${hbars(creditByAgent,credits,agentColor,12,fmtCredits)}</div><div class="panel"><h3>Estimate coverage</h3><div class="desc">Coverage indicates how much token volume had a published rate that could be applied.</div>${mini('Priced token coverage',pct(creditCoverage),`${fmt(total-priced)} tokens excluded`)}<div class="note mt">Cache writes are not charged by Codex. Reasoning is already included inside output tokens. Fast/priority pricing is only applied when the collector can identify the service tier and has a public multiplier for that model.</div></div></div>
@@ -193,7 +209,7 @@ function render(){
   `;
   bindSort();
   $('sourceNote').textContent=`Showing ${rs.length.toLocaleString()} of ${rows.length.toLocaleString()} responses · ${ts.length.toLocaleString()} turns · ${as.length.toLocaleString()} activities in current filters`;
-  $('updatedNote').textContent=meta.generated_at?`Updated ${fmtDate(meta.generated_at,true)} · credit rate ${meta.credit_rate_as_of||'current'}`:'';
+  $('updatedNote').textContent=meta.generated_at?`Updated ${fmtDate(meta.generated_at,true)} · API rates ${meta.api_price_as_of||'current'} · credit rates ${meta.credit_rate_as_of||'current'}`:'';
 }
 function bindSort(){document.querySelectorAll('th[data-sort]').forEach(th=>th.addEventListener('click',()=>{const k=th.dataset.sort;if(sortState.key===k)sortState.dir*=-1;else{sortState.key=k;sortState.dir=k==='session'||k==='model'?1:-1}const panel=$('sessionPanel');if(panel)panel.innerHTML=sessionTable(filteredRows(),filteredTurns());bindSort()}))}
 const tip=$('tooltip');
