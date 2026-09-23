@@ -1394,6 +1394,13 @@ def main() -> int:
     print(f"Rebuilt {len(dedupe_records(rebuilt_records)):,} response record(s), {len(dedupe_turns(rebuilt_turns)):,} turn(s), {len(dedupe_activity(rebuilt_activity)):,} activity record(s)")
     print(f"Dataset: {len(records):,} responses | {len(turns):,} turns | {len(activities):,} activities")
     print(f"Credit estimate coverage: {metadata['credit_coverage_pct']:.1f}% of token volume")
+    try:
+        browser_mb = data_path.stat().st_size / (1024 * 1024)
+        print(f"Browser bundle: {browser_mb:.1f} MB (packed format v2)")
+        if browser_mb > 80:
+            print("Warning: browser bundle is still very large; consider a shorter dashboard history if the browser is memory constrained.", file=sys.stderr)
+    except OSError:
+        pass
     print(f"Dashboard: {Path(__file__).resolve().parent/'dashboard'/'index.html'}")
     return 0
 
