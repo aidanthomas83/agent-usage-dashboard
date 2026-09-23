@@ -1,0 +1,19 @@
+name: Repository safety
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sensitive-data-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check tracked files for local telemetry and credentials
+        run: python scripts/check_repo_safety.py
