@@ -1354,8 +1354,12 @@ def write_dashboard_data(path: Path, records: list[dict[str, Any]], turns: list[
 
 def main() -> int:
     args=parse_args()
-    if args.days<1:
-        print("--days must be at least 1",file=sys.stderr); return 2
+    local_tz=datetime.now().astimezone().tzinfo
+    try:
+        dates=resolve_selected_dates(args, local_tz)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     codex_home=args.codex_home.expanduser().resolve(); output_dir=args.output_dir.expanduser().resolve()
     if not codex_home.exists():
         print(f"Codex home not found: {codex_home}",file=sys.stderr); return 1
@@ -1363,7 +1367,6 @@ def main() -> int:
     records_path=output_dir/"codex_usage_records.csv"; turns_path=output_dir/"codex_turns.csv"; activity_path=output_dir/"codex_activity.csv"; limits_path=output_dir/"codex_rate_limits.csv"
     daily_path=output_dir/"codex_usage_daily.csv"; data_path=output_dir/"codex_usage_data.js"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"
 
-    local_tz=datetime.now().astimezone().tzinfo; today=datetime.now(local_tz).date(); dates=[today-timedelta(days=i) for i in range(args.days)]
     selected={d.isoformat() for d in dates}; earliest=min(dates); earliest_local=datetime.combine(earliest,datetime.min.time(),tzinfo=local_tz)
     names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
 
@@ -1394,7 +1397,8 @@ def main() -> int:
 
     now=datetime.now(local_tz); priced_tokens=sum(to_int(r.get("total_tokens")) for r in records if str(r.get("credit_rate_status") or "").startswith("priced")); all_tokens=sum(to_int(r.get("total_tokens")) for r in records)
     metadata={
-        "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),"processed_dates":sorted(selected),"days_requested":args.days,
+        "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),"processed_dates":sorted(selected),"days_requested":len(dates),
+        "requested_from":min(selected),"requested_to":max(selected),
         "rollout_files_scanned":len(rollouts),"rollout_files_with_selected_activity":files_with_usage,"rebuilt_responses":len(dedupe_records(rebuilt_records)),"dataset_responses":len(records),"dataset_turns":len(turns),"dataset_activities":len(activities),
         "dataset_first_date":min((r["date"] for r in records),default=None),"dataset_last_date":max((r["date"] for r in records),default=None),"configured_agents":len(agents),
         "credit_rate_as_of":CREDIT_RATE_AS_OF,"credit_rate_source":CREDIT_RATE_SOURCE,"credit_coverage_pct":round((priced_tokens/all_tokens*100.0) if all_tokens else 0.0,4),
@@ -1408,7 +1412,7 @@ def main() -> int:
     with metadata_path.open("w",encoding="utf-8") as f: json.dump(metadata,f,indent=2); f.write("\n")
 
     ds=sorted(selected)
-    print(f"Requested window: {args.days} day(s), {ds[0]} through {ds[-1]}")
+    print(f"Requested window: {len(ds)} day(s), {ds[0]} through {ds[-1]}")
     observed_dates=sorted({str(r.get("date") or "") for r in records if r.get("date")})
     if observed_dates:
         print(f"Observed token data: {observed_dates[0]} through {observed_dates[-1]} ({len(observed_dates)} day(s) with usage)")
