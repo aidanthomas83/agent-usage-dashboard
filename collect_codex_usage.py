@@ -56,6 +56,39 @@ CREDIT_RATES: dict[str, tuple[float, float, float]] = {
 CREDIT_RATE_AS_OF = "2026-09-23"
 CREDIT_RATE_SOURCE = "https://help.openai.com/en/articles/11481834-cha"
 
+# Counterfactual direct OpenAI API token cost using today's Standard API pricing.
+# Prices are USD per 1M ordinary input, cached input, cache-write input, and output tokens.
+API_PRICE_AS_OF = "2026-09-23"
+API_PRICE_SOURCE = "https://developers.openai.com/api/docs/pricing"
+API_RATES: dict[str, tuple[float, float, float, float]] = {
+    "gpt-6-astra": (10.0, 1.0, 12.5, 50.0),
+    "gpt-6-sol": (2.0, 0.2, 2.5, 10.0),
+    "gpt-6-luna": (0.1, 0.01, 0.125, 0.5),
+    "gpt-5.6-sol": (4.0, 0.4, 5.0, 20.0),
+    "gpt-5.6-terra": (2.0, 0.2, 2.5, 12.0),
+    "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
+    "gpt-5.6-cyber": (12.5, 1.25, 15.625, 75.0),
+    "gpt-5.5": (5.0, 0.5, 5.0, 30.0),
+    "gpt-5.4": (2.5, 0.25, 2.5, 15.0),
+    "gpt-5.4-mini": (0.75, 0.075, 0.75, 4.5),
+    "gpt-5.3-codex": (1.75, 0.175, 1.75, 14.0),
+    "gpt-5.2": (1.75, 0.175, 1.75, 14.0),
+}
+API_RATE_ALIASES = {
+    "gpt-5.6": "gpt-5.6-sol",
+    "daybreak-blue": "gpt-5.6-sol",
+    "gpt-daybreak-blue-latest": "gpt-5.6-sol",
+    "daybreak-red": "gpt-5.6-cyber",
+    "gpt-daybreak-red-latest": "gpt-5.6-cyber",
+    "codex-auto-review": "gpt-5.4",
+}
+API_LONG_CONTEXT_MODELS = {
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4",
+}
+API_LONG_CONTEXT_THRESHOLD = 272_000
+
 # Fast/priority service-tier multiplier where current OpenAI documentation gives
 # a deterministic public premium. Unknown fast rates are deliberately not guessed.
 FAST_MULTIPLIERS = {
@@ -75,13 +108,13 @@ RECORD_FIELDS = [
     "model", "reasoning_effort", "service_tier", "turn_id", "root_turn_id", "response_id",
     "is_compaction", "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
     "fresh_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens",
-    "cache_hit_pct", "estimated_credits", "credit_rate_status", "source_rollout",
+    "cache_hit_pct", "estimated_credits", "credit_rate_status",\n    "api_equivalent_cost_usd", "api_cost_rate_status", "api_long_context", "source_rollout",
 ]
 RECORD_INT_FIELDS = {
     "input_tokens", "cached_input_tokens", "cache_write_input_tokens", "fresh_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
 }
-RECORD_FLOAT_FIELDS = {"cache_hit_pct", "estimated_credits"}
+RECORD_FLOAT_FIELDS = {"cache_hit_pct", "estimated_credits", "api_equivalent_cost_usd"}
 
 TURN_FIELDS = [
     "date", "started_utc", "started_local", "completed_utc", "completed_local",
@@ -203,6 +236,42 @@ def estimate_credits(model: str, fresh: int, cached: int, output: int, service_t
     credits = ((fresh / 1_000_000) * inp + (cached / 1_000_000) * cache + (output / 1_000_000) * out) * mult
     status = "priced_fast" if mult != 1.0 else ("priced_standard" if tier in {"default", "standard"} else "priced_standard_assumed")
     return credits, status
+
+
+def estimate_api_cost(
+    model: str,
+    input_tokens: int,
+    cached_tokens: int,
+    cache_write_tokens: int,
+    output_tokens: int,
+) -> tuple[float, str, bool]:
+    """Estimate today's Standard API token charge for one recorded model response."""
+    original = model_key(model)
+    priced_model = API_RATE_ALIASES.get(original, original)
+    rates = API_RATES.get(priced_model)
+    if not rates:
+        return 0.0, "unpriced_model", False
+
+    inp_rate, cached_rate, write_rate, out_rate = rates
+    long_context = input_tokens > API_LONG_CONTEXT_THRESHOLD and priced_model in API_LONG_CONTEXT_MODELS
+    if long_context:
+        inp_rate *= 2.0
+        cached_rate *= 2.0
+        write_rate *= 2.0
+        out_rate *= 1.5
+
+    ordinary = max(0, input_tokens - cached_tokens - cache_write_tokens)
+    cost = (
+        ordinary * inp_rate
+        + cached_tokens * cached_rate
+        + cache_write_tokens * write_rate
+        + output_tokens * out_rate
+    ) / 1_000_000.0
+
+    status = "priced_long_context" if long_context else "priced_standard"
+    if original == "codex-auto-review":
+        status += "_proxy_gpt-5.4"
+    return cost, status, long_context
 
 
 def load_thread_names(codex_home: Path, verbose: bool = False) -> dict[str, str]:
