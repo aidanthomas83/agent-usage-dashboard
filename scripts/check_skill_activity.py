@@ -55,7 +55,7 @@ def main() -> int:
             # Script execution under the skill also counts as implicit use.
             item("2026-09-23T00:00:02Z", "response_item", {
                 "type": "custom_tool_call", "name": "exec", "call_id": "run-skill-script",
-                "turn_id": "turn-1",
+                "turn_id": "turn-2",
                 "input": json.dumps({
                     "command": "python $env:USERPROFILE/.codex/skills/codebase-memory/scripts/check.py"
                 }),
@@ -63,7 +63,7 @@ def main() -> int:
             # Newer Codex builds can expose a first-class skills.read tool.
             item("2026-09-23T00:00:03Z", "response_item", {
                 "type": "function_call", "name": "skills.read", "call_id": "skills-read",
-                "turn_id": "turn-1",
+                "turn_id": "turn-3",
                 "arguments": json.dumps({"package": "codebase-memory"}),
             }),
         ]
