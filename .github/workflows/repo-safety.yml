@@ -19,5 +19,11 @@ jobs:
         run: python -m py_compile collect_codex_usage.py scripts/check_repo_safety.py
       - name: Check collector CLI
         run: python collect_codex_usage.py --help > /dev/null
+      - name: Smoke-test collector
+        run: |
+          mkdir -p /tmp/codex-empty
+          python collect_codex_usage.py --days 1 --codex-home /tmp/codex-empty --output-dir /tmp/codex-usage-smoke
+      - name: Check dashboard JavaScript syntax
+        run: node scripts/check_dashboard_js.mjs
       - name: Check tracked files for local telemetry and credentials
         run: python scripts/check_repo_safety.py
