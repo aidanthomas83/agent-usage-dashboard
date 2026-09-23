@@ -1352,6 +1352,95 @@ def write_dashboard_data(path: Path, records: list[dict[str, Any]], turns: list[
     os.replace(tmp, path)
 
 
+def write_sqlite_snapshot(
+    path: Path,
+    records: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
+    activities: list[dict[str, Any]],
+    limits: list[dict[str, Any]],
+    daily: list[dict[str, Any]],
+    configured_agents: list[dict[str, str]],
+    metadata: dict[str, Any],
+    daily_fields: list[str],
+) -> None:
+    """Write the complete analytics snapshot to SQLite, then atomically replace it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+
+    def sql_type(field: str, ints: set[str], floats: set[str]) -> str:
+        if field in ints:
+            return "INTEGER"
+        if field in floats:
+            return "REAL"
+        return "TEXT"
+
+    def create_and_insert(
+        conn: sqlite3.Connection,
+        table: str,
+        fields: list[str],
+        rows: list[dict[str, Any]],
+        ints: set[str],
+        floats: set[str],
+    ) -> None:
+        columns = ", ".join(f'"{field}" {sql_type(field, ints, floats)}' for field in fields)
+        conn.execute(f'CREATE TABLE "{table}" ({columns})')
+        if not rows:
+            return
+        placeholders = ",".join("?" for _ in fields)
+        values = [[row.get(field, 0 if field in ints or field in floats else "") for field in fields] for row in rows]
+        conn.executemany(
+            f'INSERT INTO "{table}" ({",".join(f""""{field}"""" for field in fields)}) VALUES ({placeholders})',
+            values,
+        )
+
+    conn = sqlite3.connect(tmp)
+    try:
+        conn.execute("PRAGMA journal_mode=OFF")
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        create_and_insert(conn, "responses", RECORD_FIELDS, records, RECORD_INT_FIELDS, RECORD_FLOAT_FIELDS)
+        create_and_insert(conn, "turns", TURN_FIELDS, turns, TURN_INT_FIELDS, TURN_FLOAT_FIELDS)
+        create_and_insert(conn, "activities", ACTIVITY_FIELDS, activities, ACTIVITY_INT_FIELDS, set())
+        create_and_insert(conn, "rate_limits", LIMIT_FIELDS, limits, LIMIT_INT_FIELDS, LIMIT_FLOAT_FIELDS)
+        create_and_insert(conn, "daily", daily_fields, daily, set(), {
+            "cache_hit_pct", "estimated_credits", "credit_coverage_pct",
+            "api_equivalent_cost_usd", "api_cost_coverage_pct",
+        })
+        create_and_insert(conn, "configured_agents", AGENT_FIELDS, configured_agents, set(), set())
+        conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.executemany(
+            "INSERT INTO metadata(key,value) VALUES (?,?)",
+            [(str(k), json.dumps(v, ensure_ascii=False, separators=(",", ":"))) for k, v in metadata.items()],
+        )
+
+        indexes = [
+            ("idx_responses_date", "responses", "date"),
+            ("idx_responses_model", "responses", "model"),
+            ("idx_responses_agent", "responses", "agent_type, agent_role, agent_label"),
+            ("idx_responses_effort", "responses", "reasoning_effort"),
+            ("idx_responses_project", "responses", "project"),
+            ("idx_responses_session", "responses", "session_id"),
+            ("idx_responses_thread", "responses", "thread_id"),
+            ("idx_turns_date", "turns", "date"),
+            ("idx_turns_session", "turns", "session_id"),
+            ("idx_turns_model", "turns", "model"),
+            ("idx_activities_date", "activities", "date"),
+            ("idx_activities_session", "activities", "session_id"),
+            ("idx_limits_date", "rate_limits", "date"),
+        ]
+        for name, table, cols in indexes:
+            conn.execute(f'CREATE INDEX "{name}" ON "{table}" ({cols})')
+        conn.commit()
+    finally:
+        conn.close()
+
+    os.replace(tmp, path)
+
+
 def main() -> int:
     args=parse_args()
     local_tz=datetime.now().astimezone().tzinfo
