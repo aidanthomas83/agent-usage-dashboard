@@ -660,6 +660,7 @@ def parse_rollout(
     thread_names: dict[str, str],
     codex_home: Path,
     verbose: bool,
+    configured_skills: list[dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     items = list(read_jsonl(path, verbose))
     if not items:
@@ -697,9 +698,19 @@ def parse_rollout(
     skill_events: list[dict[str, Any]] = []
     plugin_events: list[dict[str, Any]] = []
     seen_skill_events: set[tuple[str, str]] = set()
+    skill_aliases = configured_skill_aliases(configured_skills)
 
-    def stage_skill(skill: Any, call_id: str, turn_id: str, timestamp: datetime | None, ctx: dict[str, str]) -> None:
-        name = clean_skill_name(skill)
+    def resolve_skill(skill: Any, require_configured: bool = False) -> str:
+        raw = clean_skill_name(skill)
+        if not raw:
+            return ""
+        resolved = skill_aliases.get(skill_identity_key(raw))
+        if resolved:
+            return resolved
+        return "" if require_configured else raw
+
+    def stage_skill(skill: Any, call_id: str, turn_id: str, timestamp: datetime | None, ctx: dict[str, str], require_configured: bool = False) -> None:
+        name = resolve_skill(skill, require_configured=require_configured)
         if not name or not timestamp:
             return
         key = (str(turn_id or ""), name.lower())
@@ -1553,7 +1564,7 @@ def main() -> int:
     total_rollouts=len(rollouts)
     progress_every=max(1,total_rollouts//10) if total_rollouts else 1
     for idx,path in enumerate(rollouts,1):
-        r,t,a,l=parse_rollout(path,selected,local_tz,names,codex_home,args.verbose)
+        r,t,a,l=parse_rollout(path,selected,local_tz,names,codex_home,args.verbose,skills)
         if r or t or a: files_with_usage+=1
         rebuilt_records.extend(r); rebuilt_turns.extend(t); rebuilt_activity.extend(a); rebuilt_limits.extend(l)
         if idx==total_rollouts or idx%progress_every==0:
