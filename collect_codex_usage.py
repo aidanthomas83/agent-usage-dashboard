@@ -545,6 +545,28 @@ def clean_skill_name(value: Any) -> str:
     return name[:200]
 
 
+def skill_identity_key(value: Any) -> str:
+    """Normalize skill display names, slugs, and folder names to one identity."""
+    return re.sub(r"[^a-z0-9]+", "-", clean_skill_name(value).lower()).strip("-")
+
+
+def configured_skill_aliases(skills: list[dict[str, str]] | None) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for row in skills or []:
+        canonical = clean_skill_name(row.get("name"))
+        if not canonical:
+            continue
+        candidates = [canonical]
+        skill_file = str(row.get("skill_file") or "").replace("\\", "/")
+        parts = [p for p in skill_file.split("/") if p]
+        if len(parts) >= 2:
+            candidates.append(parts[-2])
+        for candidate in candidates:
+            key = skill_identity_key(candidate)
+            if key:
+                aliases[key] = canonical
+    return aliases
+
 def call_payload_text(payload: dict[str, Any]) -> str:
     for key in ("input", "arguments", "args"):
         value = payload.get(key)
