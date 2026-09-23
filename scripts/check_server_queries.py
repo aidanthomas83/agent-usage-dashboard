@@ -103,6 +103,29 @@ def main() -> int:
             ["date"],
         )
 
+        # Simulate the database created by the previous application version:
+        # historical telemetry exists, but configured_skills/new indexes do not.
+        import sqlite3
+        with sqlite3.connect(db) as conn:
+            conn.execute("DROP TABLE configured_skills")
+            before = conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
+
+        skills_root = data_dir / "codex-home" / "skills"
+        (skills_root / "coding-standards").mkdir(parents=True)
+        (skills_root / "coding-standards" / "SKILL.md").write_text("---\nname: coding-standards\n---\n", encoding="utf-8")
+        (skills_root / "unused-skill").mkdir(parents=True)
+        (skills_root / "unused-skill" / "SKILL.md").write_text("---\nname: unused-skill\n---\n", encoding="utf-8")
+        server.migrate_existing_database(data_dir, data_dir / "codex-home")
+
+        with sqlite3.connect(db) as conn:
+            after = conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
+            configured_count = conn.execute("SELECT COUNT(*) FROM configured_skills").fetchone()[0]
+            indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert before == after == 1
+        assert configured_count == 2
+        assert "idx_responses_dashboard" in indexes
+        assert "idx_responses_date_session" in indexes
+
         filters = {
             "from": "2026-09-23", "to": "2026-09-23",
             "model": "", "agent": "", "effort": "", "project": "",
