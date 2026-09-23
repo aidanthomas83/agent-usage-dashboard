@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression test for Codex desktop skill activity summaries."""
+"""Regression tests for Codex implicit skill invocation detection."""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,7 @@ def item(ts: str, typ: str, payload: dict) -> dict:
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         codex_home = Path(td)
-        rollout = codex_home / "sessions" / "2026" / "09" / "23" / "rollout-skill-summary.jsonl"
+        rollout = codex_home / "sessions" / "2026" / "09" / "23" / "rollout-skill-access.jsonl"
         rollout.parent.mkdir(parents=True)
 
         rows = [
@@ -30,15 +30,41 @@ def main() -> int:
             item("2026-09-23T00:00:00.100Z", "turn_context", {
                 "turn_id": "turn-1", "model": "gpt-5.6-luna", "effort": "medium"
             }),
-            # User prose must not be interpreted as observed skill use.
+            # Prose alone is not evidence of an invocation.
             item("2026-09-23T00:00:00.200Z", "response_item", {
-                "type": "message", "role": "user", "turn_id": "turn-user",
-                "content": [{"type": "input_text", "text": "Read Codebase Memory skill"}]
-            }),
-            # This mirrors the concise Codex desktop activity shown in the UI.
-            item("2026-09-23T00:00:01Z", "response_item", {
                 "type": "message", "role": "assistant", "turn_id": "turn-1",
                 "content": [{"type": "output_text", "text": "Read Codebase Memory skill"}]
+            }),
+            # A wildcard/search mentioning the skill and SKILL.md is also not an
+            # invocation; Codex's own detection requires a concrete skill access.
+            item("2026-09-23T00:00:00.300Z", "response_item", {
+                "type": "custom_tool_call", "name": "exec", "call_id": "search-only",
+                "turn_id": "turn-1",
+                "input": json.dumps({
+                    "command": "rg -n 'Codebase Memory' $env:USERPROFILE/.codex/skills/**/SKILL.md"
+                }),
+            }),
+            # Concrete PowerShell read of the configured skill document.
+            item("2026-09-23T00:00:01Z", "response_item", {
+                "type": "custom_tool_call", "name": "exec", "call_id": "read-skill",
+                "turn_id": "turn-1",
+                "input": json.dumps({
+                    "command": "Get-Content $env:USERPROFILE/.codex/skills/codebase-memory/SKILL.md"
+                }),
+            }),
+            # Script execution under the skill also counts as implicit use.
+            item("2026-09-23T00:00:02Z", "response_item", {
+                "type": "custom_tool_call", "name": "exec", "call_id": "run-skill-script",
+                "turn_id": "turn-1",
+                "input": json.dumps({
+                    "command": "python $env:USERPROFILE/.codex/skills/codebase-memory/scripts/check.py"
+                }),
+            }),
+            # Newer Codex builds can expose a first-class skills.read tool.
+            item("2026-09-23T00:00:03Z", "response_item", {
+                "type": "function_call", "name": "skills.read", "call_id": "skills-read",
+                "turn_id": "turn-1",
+                "arguments": json.dumps({"package": "codebase-memory"}),
             }),
         ]
         rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -58,11 +84,13 @@ def main() -> int:
         )
 
         skills = [row for row in activities if row.get("activity_type") == "skill"]
-        assert len(skills) == 1, skills
-        assert skills[0]["skill_name"] == "codebase-memory", skills[0]
-        assert skills[0]["turn_id"] == "turn-1", skills[0]
+        assert len(skills) == 3, skills
+        assert {row["skill_name"] for row in skills} == {"codebase-memory"}, skills
+        assert {row["call_id"] for row in skills} == {
+            "read-skill", "run-skill-script", "skills-read"
+        }, skills
 
-    print("Codex skill activity summary regression test passed.")
+    print("Codex implicit skill invocation regression test passed.")
     return 0
 
 
