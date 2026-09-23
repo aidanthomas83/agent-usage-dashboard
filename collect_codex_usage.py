@@ -1096,7 +1096,7 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
     for r in records:
         day = str(r.get("date") or "")
         if not day: continue
-        g = grouped.setdefault(day, {"date":day,"responses":0,"sessions":set(),"threads":set(),"models":set(),"input_tokens":0,"cached_input_tokens":0,"fresh_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0,"estimated_credits":0.0,"compaction_responses":0,"priced_tokens":0})
+        g = grouped.setdefault(day, {"date":day,"responses":0,"sessions":set(),"threads":set(),"models":set(),"input_tokens":0,"cached_input_tokens":0,"fresh_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0,"estimated_credits":0.0,"api_equivalent_cost_usd":0.0,"compaction_responses":0,"priced_tokens":0,"api_priced_tokens":0})
         g["responses"] += 1
         if r.get("session_id"): g["sessions"].add(r["session_id"])
         if r.get("thread_id"): g["threads"].add(r["thread_id"])
@@ -1104,7 +1104,9 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
         for f in ("input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens"):
             g[f] += to_int(r.get(f))
         g["estimated_credits"] += to_float(r.get("estimated_credits"))
+        g["api_equivalent_cost_usd"] += to_float(r.get("api_equivalent_cost_usd"))
         if str(r.get("credit_rate_status") or "").startswith("priced"): g["priced_tokens"] += to_int(r.get("total_tokens"))
+        if str(r.get("api_cost_rate_status") or "").startswith("priced"): g["api_priced_tokens"] += to_int(r.get("total_tokens"))
         if str(r.get("is_compaction") or "").lower() == "true": g["compaction_responses"] += 1
     turn_counts = defaultdict(int); failures = defaultdict(int); duration = defaultdict(int)
     for t in turns:
@@ -1121,6 +1123,7 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
             "date":day,"responses":g["responses"],"turns":turn_counts[day],"sessions":len(g["sessions"]),"threads":len(g["threads"]),"models":len(g["models"]),
             "input_tokens":g["input_tokens"],"cached_input_tokens":g["cached_input_tokens"],"fresh_input_tokens":g["fresh_input_tokens"],"output_tokens":g["output_tokens"],"reasoning_output_tokens":g["reasoning_output_tokens"],"total_tokens":tot,
             "cache_hit_pct":round((g["cached_input_tokens"]/inp*100.0) if inp else 0.0,4),"estimated_credits":round(g["estimated_credits"],6),"credit_coverage_pct":round((g["priced_tokens"]/tot*100.0) if tot else 0.0,4),
+            "api_equivalent_cost_usd":round(g["api_equivalent_cost_usd"],6),"api_cost_coverage_pct":round((g["api_priced_tokens"]/tot*100.0) if tot else 0.0,4),
             "compaction_responses":g["compaction_responses"],"failed_or_aborted_turns":failures[day],"turn_duration_ms":duration[day],"tool_calls":tool_counts[day],"skill_uses":skill_counts[day],"patch_lines_changed":code_lines[day],
         })
     return out
@@ -1172,7 +1175,7 @@ def main() -> int:
 
     write_csv_atomic(records_path,records,RECORD_FIELDS); write_csv_atomic(turns_path,turns,TURN_FIELDS); write_csv_atomic(activity_path,activities,ACTIVITY_FIELDS); write_csv_atomic(limits_path,limits,LIMIT_FIELDS); write_csv_atomic(agents_path,agents,AGENT_FIELDS)
     daily=daily_summary(records,turns,activities)
-    daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
+    daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","api_equivalent_cost_usd","api_cost_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
     write_csv_atomic(daily_path,daily,daily_fields)
 
     now=datetime.now(local_tz); priced_tokens=sum(to_int(r.get("total_tokens")) for r in records if str(r.get("credit_rate_status") or "").startswith("priced")); all_tokens=sum(to_int(r.get("total_tokens")) for r in records)
@@ -1182,6 +1185,8 @@ def main() -> int:
         "dataset_first_date":min((r["date"] for r in records),default=None),"dataset_last_date":max((r["date"] for r in records),default=None),"configured_agents":len(agents),
         "credit_rate_as_of":CREDIT_RATE_AS_OF,"credit_rate_source":CREDIT_RATE_SOURCE,"credit_coverage_pct":round((priced_tokens/all_tokens*100.0) if all_tokens else 0.0,4),
         "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
+        "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
+        "api_cost_note":"Counterfactual Standard OpenAI API token cost at today's rates. Includes cached-input and cache-write pricing plus documented >272K long-context multipliers. Excludes separate tool-call, web-search, container, storage, regional-processing, and other non-token API charges.",
         "accounting_note":"Per-response token_usage_record rows deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
     }
     write_dashboard_data(data_path,records,turns,activities,limits,metadata,agents)
