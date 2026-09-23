@@ -1,225 +1,208 @@
-# Codex Usage Dashboard
+# Agent Usage Dashboard
 
-A local, read-only Codex telemetry collector plus an offline dashboard.
+A local, Dockerized dashboard for analysing Codex usage from the rollout telemetry stored under `~/.codex`.
 
-## Quick start on Windows
+The application is designed to answer questions such as:
 
-1. Extract/keep this folder anywhere convenient.
-2. Make sure Python 3.10+ is installed (`py --version`).
-3. Run:
+- Which models and agents are consuming the most capacity?
+- How much input is fresh vs cached?
+- How much would the selected token usage cost through the OpenAI API at the embedded current rate card?
+- Which sessions, agents and reasoning levels are most expensive?
+- How much compaction, tool and skill activity is occurring?
+- What value am I getting from my Codex / ChatGPT subscription?
 
-   ```bat
-   run-usage-report.cmd 7
-   ```
+## Architecture
 
-The runner also accepts the explicit collector-style syntax:
-
-```bat
-run-usage-report.cmd --days 90
-run-usage-report.cmd --days 90 --scan-all
+```text
+~/.codex (read-only)
+      |
+      v
+collector
+      |
+      v
+data/codex_usage.sqlite
+      |
+      v
+local Python API
+      |
+      v
+http://127.0.0.1:8765
 ```
 
-`7` means **today plus the previous 6 local calendar days**. The command refreshes those day partitions and opens `dashboard\index.html`.
+The browser no longer loads a generated `codex_usage_data.js` file. Dashboard queries are executed against SQLite and returned asynchronously as small aggregated JSON responses.
 
-Direct usage:
+The detailed CSV files are still produced as local exports/debugging data, but they are not used by the dashboard runtime.
+
+## Start the dashboard
+
+Prerequisites:
+
+- Docker Desktop
+- this repository cloned locally
+- Codex data at `%USERPROFILE%\.codex` on Windows
+
+From the repository folder, build and start it once:
 
 ```powershell
-py .\collect_codex_usage.py --days 30
+docker compose up -d --build
 ```
 
-Alternative Codex home:
+Then open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The container uses `restart: unless-stopped`, so after the first setup Docker Desktop can restart it automatically when Docker starts.
+
+To stop it:
 
 ```powershell
-py .\collect_codex_usage.py --days 30 --codex-home "D:\path\to\.codex"
+docker compose stop
 ```
 
-Force a complete rollout scan when file mtimes are unreliable:
+To start it again:
 
 ```powershell
-py .\collect_codex_usage.py --days 30 --scan-all
+docker compose start
 ```
 
-## Idempotent updates
+To rebuild after pulling source changes:
 
-The collector does **not append blindly**. For every date included in `--days N`, it removes existing rows for that local calendar date, rebuilds them from rollout files, deduplicates them, and atomically rewrites the datasets. Rerunning the same period therefore updates/corrects the same date partitions rather than creating duplicates.
+```powershell
+git pull
+docker compose up -d --build
+```
 
-## Generated data
+## Refresh data from the dashboard
 
-- `data/codex_usage_records.csv` — one row per unique model response/token record.
-- `data/codex_turns.csv` — task/turn lifecycle: model, effort, duration, TTFT, status, context window, token totals.
-- `data/codex_activity.csv` — tool, plugin and detected skill activity. Raw tool arguments/output are **not** stored.
-- `data/codex_rate_limits.csv` — observed primary/secondary rate-limit pressure where Codex persisted it.
-- `data/codex_usage_daily.csv` — daily aggregate.
-- `data/codex_agents.csv` — custom agent definitions under `%USERPROFILE%\.codex\agents`.
-- `data/codex_usage_data.js` — local browser bundle used by the dashboard.
-- `data/codex_usage_metadata.json` — collector metadata and credit-rate assumptions.
-- `dashboard/index.html` — fully local dashboard; no npm install or web server required.
+Use **Refresh data** in the top-right of the dashboard.
 
-## Token accounting
+Two refresh modes are supported:
 
-The collector uses request-level `token_usage_record` entries, deduplicated by `(thread_id, response_id)`.
+- **Last N days** — e.g. 7, 30, 60 or 90 days.
+- **Date range** — explicitly select the first and last dates to rebuild.
 
-It records:
+Refreshes run in the background. The existing dashboard remains usable while the collector is working, and the page automatically reloads the SQLite-backed measurements after the refresh completes.
 
-- model and reasoning effort actually persisted for the turn;
-- service tier where available (`default`, `priority` / Fast, etc.);
-- main thread vs subagent and stable agent role;
-- input, cached input, fresh input, cache-write input, output and reasoning-output tokens;
-- compaction responses;
-- thread/session lifecycle timestamps.
+There is also a **Full rollout scan** option. Use this for historical backfills or after changes to the rollout parser. Normal incremental refreshes do not usually need it.
 
-`fresh_input_tokens = input_tokens - cached_input_tokens`.
+Refreshes remain idempotent: the selected local calendar dates are rebuilt rather than appended, so rerunning the same range does not duplicate usage.
 
-Reasoning output is already included in output tokens, so it is **not added a second time**.
+## Docker mounts and privacy
+
+The Compose configuration mounts:
+
+```text
+%USERPROFILE%/.codex  ->  /codex     read-only
+./data                ->  /app/data  read/write
+```
+
+The Codex source mount is deliberately **read-only**. The collector cannot modify the local Codex sessions or agent definitions.
+
+The web service is exposed only on:
+
+```text
+127.0.0.1:8765
+```
+
+rather than all LAN interfaces.
+
+The repository does not source-control local telemetry. `.gitignore`, `.dockerignore` and the GitHub Actions safety job exclude or check for:
+
+- `data/`
+- Codex JSONL/session data
+- SQLite/database files
+- environment files
+- API keys / common credentials
+- private keys
+- user-specific local paths
+
+## Local data
+
+Runtime data is written beneath the gitignored `data/` folder:
+
+```text
+data/
+  codex_usage.sqlite
+  codex_usage_records.csv
+  codex_turns.csv
+  codex_activity.csv
+  codex_rate_limits.csv
+  codex_usage_daily.csv
+  codex_agents.csv
+  codex_usage_metadata.json
+```
+
+SQLite is the dashboard source of truth. CSVs are retained for inspection/export.
+
+## Dashboard filtering
+
+The dashboard supports:
+
+- date range
+- 7 / 30 / 60 / 90-day shortcuts
+- model
+- agent / role
+- reasoning effort
+- project
+
+Filters are sent to the local API and applied in SQLite. The browser does not need to download all raw response records to change a filter.
 
 ## API-equivalent token cost
 
-The dashboard also calculates a **counterfactual Standard OpenAI API token cost in USD**. This is intended to help assess the value delivered by the subscription: for the currently selected dashboard date range, it asks what the same recorded model-token traffic would cost at the embedded current API rate card.
+The dashboard calculates a **counterfactual Standard OpenAI API token cost in USD** for the selected usage.
 
-The embedded API rate card is dated **23 Sep 2026**. Representative short-context Standard rates per 1M tokens are:
-
-| Model | Input | Cached input | Cache write | Output |
-|---|---:|---:|---:|---:|
-| GPT-6 Astra | $10.00 | $1.00 | $12.50 | $50.00 |
-| GPT-6 Sol | $2.00 | $0.20 | $2.50 | $10.00 |
-| GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
-| GPT-5.6 Sol | $4.00 | $0.40 | $5.00 | $20.00 |
-| GPT-5.6 Terra | $2.00 | $0.20 | $2.50 | $12.00 |
-| GPT-5.6 Luna | $0.20 | $0.02 | $0.25 | $1.20 |
-
-For supported long-context models, requests with more than 272K input tokens use the documented full-request long-context multipliers: 2x input/cached/cache-write rates and 1.5x output.
-
-Cache writes are treated as their own token category rather than as an additional surcharge on ordinary input. The estimate is therefore:
+It uses the token categories persisted by Codex:
 
 ```text
-ordinary input = input - cached input - cache-write input
-
-API token cost =
-  ordinary input × input rate
-+ cached input × cached rate
-+ cache-write input × cache-write rate
-+ output × output rate
+ordinary input
+cached input
+cache-write input
+output
 ```
 
-The dashboard reports API-equivalent cost by **day, model, agent/role and session**, plus pricing coverage and the number of long-context responses. `codex-auto-review` is estimated using the GPT-5.4 API token price as a proxy.
+and the embedded current API rate card, including documented long-context multipliers where applicable.
 
-This is a **token-only counterfactual**, not an API invoice. It excludes separately priced API services such as web-search calls, containers, storage, regional processing and other non-token tool charges. Rates are embedded so the local collector stays offline/reproducible; when OpenAI changes prices, the rate table should be updated.
+This is intended as a subscription-value comparison rather than an invoice. It does not include separately priced API services such as web search, containers, storage, regional processing or other non-token charges.
 
-Current API pricing reference: https://developers.openai.com/api/docs/pricing
+The dashboard also keeps the separate Codex/Business credit-equivalent estimate.
 
-## Estimated Codex credits
+## Historical Codex telemetry
 
-The collector calculates an **estimated token-based credit equivalent** from fresh input, cached input and output tokens using the current ChatGPT Business / Codex rate card embedded in the script.
+The collector supports both:
 
-As of **23 Sep 2026**, the principal rates embedded are:
+- newer per-response `token_usage_record` events
+- older cumulative `event_msg -> token_count -> info.total_token_usage` events
 
-| Model | Input / 1M | Cached / 1M | Output / 1M |
-|---|---:|---:|---:|
-| GPT-6 Astra | 250 credits | 25 | 1,250 |
-| GPT-5.6 Sol | 100 credits | 10 | 500 |
-| GPT-5.6 Terra | 50 credits | 5 | 300 |
-| GPT-5.6 Luna | 5 credits | 0.5 | 30 |
+For older rollouts, request usage is recovered from positive changes in cumulative totals. This avoids double-counting repeated `last_token_usage` snapshots.
 
-The Sol rate reflects the current promotional purchased-credit rate. Additional published models are also included in the collector. `codex-auto-review` is priced using GPT-5.4 because the current OpenAI rate card states Auto review uses GPT-5.4.
+The terminal/debug metadata distinguishes the requested refresh window from dates where recoverable token data was actually observed.
 
-The dashboard shows **credit coverage**. Models or Fast-tier combinations without a current published mapping are excluded rather than guessed. Codex does not charge for cache writes. These values are estimates from local rollout telemetry, not an authoritative invoice or workspace billing ledger.
+## CLI collector
 
-Current rate-card reference: https://help.openai.com/en/articles/11481834-cha
+The collector can still be run directly for troubleshooting or exports, although normal use should now happen through the dashboard.
 
-## New dashboard views
-
-### Consistent colour system
-
-Every model receives one stable colour across:
-
-- Daily token mix
-- Models
-- Tokens by model
-- Estimated credits by day/model
-- Turns by model
-- Highest-usage session model pills
-
-Every agent/role also receives one stable colour across agent charts and credit/response breakdowns.
-
-### Daily token mix
-
-- Stacked by model.
-- Date axis is `DD-MON` while chronological sorting remains ISO-date based.
-- Hovering a day shows cached input, fresh input, output, total tokens and the per-model split.
-
-### Agents / roles
-
-- Aggregates by stable role (`executor`, `guardian_review`, etc.), not Codex-generated nicknames.
-- Scans `.codex\agents\*.toml` and shows configured agents as status pills.
-- Status is represented by the pill dot only: used in the selected range, used elsewhere in collected history, or never observed.
-
-### Estimated credits
-
-Includes estimated credits by:
-
-- day;
-- model;
-- agent/role;
-- session (in the sortable session table).
-
-### Useful insights
-
-Where the rollout data supports them, the dashboard includes:
-
-- average and P95 input tokens per model response;
-- context amplification (`total input processed / fresh input`);
-- compaction token and estimated-credit overhead;
-- average/P95 turn duration;
-- average/P95 time to first token;
-- failed/aborted turns;
-- P95 context-window utilisation;
-- tool/plugin activity;
-- best-effort detected skill usage from injected `<skill>` fragments, `skills://` reads, and local `SKILL.md` reads;
-- response density and agent efficiency;
-- observed primary/secondary rate-limit pressure.
-
-### Product/activity charts
-
-Inspired by Codex/OpenAI's own analytics views:
-
-- Tokens by model over time;
-- Turns by model over time;
-- Patch lines changed per day;
-- Tool/plugin activity over time;
-- Skills used over time.
-
-`Patch lines changed` is an approximation based on additions + deletions in successful/observed `apply_patch` diffs. It is not a final Git repository diff and should not be treated as an exact lines-of-code productivity measure.
-
-Skill/plugin detection depends on what the Codex client persisted into the rollout. The collector now detects structured injected `<skill><name>...</name>...</skill>` fragments, `skills://.../skill.md` reads, local `.../skills/<name>/SKILL.md` reads, and recognisable `mcp__...` calls. Codex does not currently persist a first-class local skill invocation event in the ordinary rollout/log stream, so this remains best-effort and can still be incomplete.
-
-### Highest-usage sessions
-
-All columns are sortable. The table includes:
-
-- session start and latest activity;
-- top-model colour pill;
-- agents, turns and responses;
-- compactions;
-- estimated credits + credit coverage;\n- API-equivalent token cost + API pricing coverage;
-- fresh/cached/output/total tokens;
-- accumulated turn duration;
-- maximum observed context utilisation;
-- failed/aborted turn count.
-
-## Privacy
-
-Everything stays local. The collector reads your local Codex files and writes summary datasets beside the dashboard. It deliberately does **not** write prompt text, assistant messages, tool arguments, tool output, or source-code contents into the analytics datasets.
-
-## Source control safety
-
-This repository is designed to contain **source code only**. Generated Codex telemetry can include session names, project paths, agent names, timestamps, identifiers, and usage history, so it should stay local.
-
-The included `.gitignore` excludes generated `data/`, preview/test outputs, Codex JSONL/session databases, environment files, keys, backups, and other local artefacts. GitHub Actions also compiles the Python collector, smoke-tests an empty local run, validates dashboard JavaScript syntax, rejects tracked telemetry paths, and scans tracked text files for common credential formats and user-specific absolute home paths.
-
-Before publishing a change manually, you can run:
+Examples:
 
 ```powershell
-py .\scripts\check_repo_safety.py
+py .\collect_codex_usage.py --days 7
+
+py .\collect_codex_usage.py --from-date 2026-07-01 --to-date 2026-09-23 --scan-all
 ```
 
-Do not force-add ignored telemetry files with `git add -f`.
+The legacy `run-usage-report.cmd` wrapper is retained for troubleshooting compatibility.
+
+## Development checks
+
+GitHub Actions verifies:
+
+- Python syntax
+- collector CLI startup
+- collector smoke run
+- legacy `token_count` telemetry regression
+- local API server startup and health endpoint
+- dashboard JavaScript syntax
+- Docker image build
+- Windows CLI wrapper
+- sensitive-data / telemetry repository safety
