@@ -451,8 +451,7 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
             cmd.append("--scan-all")
         try:
             proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, timeout=None)
-            log_lines = ((proc.stdout or "") + "
-" + (proc.stderr or "")).strip().splitlines()[-40:]
+            log_lines = ((proc.stdout or "") + "\\n" + (proc.stderr or "")).strip().splitlines()[-40:]
             with _REFRESH_LOCK:
                 _REFRESH["return_code"] = proc.returncode
                 _REFRESH["log"] = log_lines
