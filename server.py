@@ -504,8 +504,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         return self.server
 
     def log_message(self, fmt, *args):
-        sys.stdout.write("%s - %s
-" % (self.address_string(), fmt % args))
+        sys.stdout.write("%s - %s\\n" % (self.address_string(), fmt % args))
 
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
