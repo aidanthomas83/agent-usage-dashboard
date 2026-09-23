@@ -27,3 +27,24 @@ jobs:
         run: node scripts/check_dashboard_js.mjs
       - name: Check tracked files for local telemetry and credentials
         run: python scripts/check_repo_safety.py
+
+  windows-runner-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test Windows runner argument forms
+        shell: pwsh
+        run: |
+          $codexHome = Join-Path $env:RUNNER_TEMP "codex-empty"
+          $outDir = Join-Path $env:RUNNER_TEMP "usage-out"
+          New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
+          $env:CODEX_USAGE_NO_OPEN = "1"
+
+          .\run-usage-report.cmd --days 1 --codex-home "$codexHome" --output-dir "$outDir"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          .\run-usage-report.cmd 1 --codex-home "$codexHome" --output-dir "$outDir"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
