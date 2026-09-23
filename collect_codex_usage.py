@@ -1051,7 +1051,7 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
 
 def write_dashboard_data(path: Path, records: list[dict[str, Any]], turns: list[dict[str, Any]], activities: list[dict[str, Any]], limits: list[dict[str, Any]], metadata: dict[str, Any], configured_agents: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"metadata":metadata,"records":records,"turns":turns,"activities":activities,"rate_limits":limits,"configured_agents":configured_agents}    tmp = path.with_suffix(path.suffix + ".tmp")
+    payload = {"metadata":metadata,"records":records,"turns":turns,"activities":activities,"rate_limits":limits,"configured_agents":configured_agents}\n    tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         f.write("window.CODEX_USAGE_DATA = "); json.dump(payload,f,ensure_ascii=False,separators=(",",":")); f.write(";\n")
     os.replace(tmp,path)
