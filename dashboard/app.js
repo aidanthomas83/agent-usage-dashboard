@@ -70,6 +70,11 @@ function filters(){
   };
 }
 function queryString(obj){const q=new URLSearchParams();Object.entries(obj).forEach(([k,v])=>{if(v)q.set(k,v)});return q.toString();}
+function selectedCalendarDays(){
+  const f=filters();if(!f.from||!f.to)return 0;
+  const a=new Date(f.from+'T00:00:00Z'),b=new Date(f.to+'T00:00:00Z');
+  return Math.max(1,Math.round((b-a)/86400000)+1);
+}
 async function api(url,options={}){
   const res=await fetch(url,{cache:'no-store',...options});
   const data=await res.json().catch(()=>({error:`HTTP ${res.status}`}));
@@ -172,14 +177,20 @@ function hbars(entries,total,colorFn,valueFmt=fmt,maxRows=12){
   return`<div class="hbars">${shown.map(x=>{const name=x.name||'Unknown',v=n(x.total_tokens??x.value??x.api_cost),share=total?pct(v/total*100):'',color=colorFn(name);return`<div class="hrow" data-tip-json="${tipJson(name,[{label:'Value',value:valueFmt(v),color},{label:'Share',value:share,color}])}"><div class="hname" title="${esc(name)}">${esc(name)}</div><div class="track"><div class="fill" style="--fill:${color};width:${Math.max(1,v/mx*100)}%"></div></div><div class="hval">${valueFmt(v)}${share?` · ${share}`:''}</div></div>`}).join('')}</div>`;
 }
 
-function stackedDaily(data,valueKey='total_tokens',mode='tokens'){
+function stackedDaily(data,valueKey='total_tokens',mode='tokens',options={}){
   if(!data.length)return'<div class="empty">No data for this selection.</div>';
   const dates=uniq(data.map(x=>x.date)).sort(),models=uniq(data.map(x=>x.model));
   const by=new Map();data.forEach(r=>by.set(r.date+'|'+r.model,n(r[valueKey])));
   const dateTotals=new Map();dates.forEach(d=>dateTotals.set(d,data.filter(x=>x.date===d).reduce((a,x)=>a+n(x[valueKey]),0)));
-  const W=1200,H=350,L=68,R=18,T=18,B=45,pw=W-L-R,ph=H-T-B,max=Math.max(...dateTotals.values(),1),step=pw/dates.length,bw=Math.min(52,Math.max(3,step*.68));
+  const avg=n(options.average),avgLabel=options.averageLabel||'Average';
+  const W=1200,H=350,L=68,R=18,T=18,B=45,pw=W-L-R,ph=H-T-B,max=Math.max(...dateTotals.values(),avg,1),step=pw/dates.length,bw=Math.min(52,Math.max(3,step*.68));
   const y=v=>T+ph-v/max*ph;let svg=`<svg viewBox="0 0 ${W} ${H}">`;
   for(let i=0;i<=4;i++){const v=max*i/4,yy=y(v);svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}"/><text class="axis-label" x="${L-8}" y="${yy+3}" text-anchor="end">${mode==='usd'?fmtUsd(v):fmt(v)}</text>`;}
+  if(avg>0){
+    const yy=y(avg),avgColor='#b45309';
+    svg+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="${avgColor}" stroke-width="2" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>`;
+    svg+=`<text class="axis-label" x="${W-R-2}" y="${Math.max(T+11,yy-6)}" text-anchor="end" fill="${avgColor}">${esc(avgLabel)} ${mode==='usd'?fmtUsd(avg):fmt(avg)}</text>`;
+  }
   const tickEvery=Math.max(1,Math.ceil(dates.length/12));
   dates.forEach((d,i)=>{
     const x=L+i*step+(step-bw)/2;let acc=0;
@@ -187,11 +198,13 @@ function stackedDaily(data,valueKey='total_tokens',mode='tokens'){
     const rows=data.filter(x=>x.date===d),total=rows.reduce((a,x)=>a+n(x[valueKey]),0);
     const items=mode==='tokens'?
       [{label:'Total',value:fmtExact(total),color:'#5f6b78'},{label:'Cached input',value:fmtExact(rows.reduce((a,x)=>a+n(x.cached_input_tokens),0)),color:'#159a8c'},{label:'Fresh input',value:fmtExact(rows.reduce((a,x)=>a+n(x.fresh_input_tokens),0)),color:'#ee8726'},{label:'Output',value:fmtExact(rows.reduce((a,x)=>a+n(x.output_tokens),0)),color:'#e85d9e'},...rows.map(x=>({label:x.model,value:fmtExact(x[valueKey]),color:modelColor(x.model)}))]:
-      [{label:'API-equivalent cost',value:fmtUsd(total),color:'#37ae69'},...rows.map(x=>({label:x.model,value:fmtUsd(x[valueKey]),color:modelColor(x.model)}))];
+      [{label:'API-equivalent cost',value:fmtUsd(total),color:'#37ae69'},...(avg>0?[{label:avgLabel,value:fmtUsd(avg),color:'#b45309'}]:[]),...rows.map(x=>({label:x.model,value:fmtUsd(x[valueKey]),color:modelColor(x.model)}))];
     svg+=`<rect x="${L+i*step}" y="${T}" width="${step}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/>`;
     if(i===0||i===dates.length-1||i%tickEvery===0)svg+=`<text class="axis-label" x="${L+i*step+step/2}" y="${H-13}" text-anchor="middle">${axisDate(d)}</text>`;
   });
-  svg+='</svg>';return svg+legend(models,modelColor);
+  svg+='</svg>';
+  const avgLegend=avg>0?`<div class="legend"><span class="legend-item"><span class="avg-line-swatch"></span>${esc(avgLabel)} · ${mode==='usd'?fmtUsd(avg):fmt(avg)}</span></div>`:'';
+  return svg+legend(models,modelColor)+avgLegend;
 }
 
 function lineChart(data,nameKey,valueKey,colorFn,options={}){
@@ -267,7 +280,7 @@ function pricingTable(pricing){
 }
 
 function renderSubscription(data){
-  const s=data.summary||{},pricing=data.pricing||{},cost=n(s.api_cost);
+  const s=data.summary||{},pricing=data.pricing||{},cost=n(s.api_cost),viewDays=selectedCalendarDays(),avgDaily=viewDays?cost/viewDays:0;
   return`
     <div class="tab-title"><div><h2>Subscription value · API-equivalent token cost</h2><p>What the selected recorded token traffic would cost using the active Standard OpenAI API rate card.</p></div></div>
     <div class="kpis subscription-kpis">
@@ -277,7 +290,7 @@ function renderSubscription(data){
       ${kpi('Unpriced token volume',fmt(n(s.total_tokens)-n(s.api_priced_tokens)),n(s.api_coverage_pct)<100?'Excluded from cost rather than guessed':'Full pricing coverage','var(--amber)')}
       ${kpi('Long-context responses',fmtExact(s.long_context_responses),`>${fmt(pricing.long_context_threshold||272000)} input tokens`,'var(--purple)')}
     </div>
-    <div class="panel full-panel"><h3>API-equivalent cost by day</h3><div class="desc">Full-width daily cost by model. Hover any day for the model split.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[],'api_cost','usd')}</div></div>
+    <div class="panel full-panel"><h3>API-equivalent cost by day</h3><div class="desc">Full-width daily cost by model. Hover any day for the model split.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[],'api_cost','usd',{average:avgDaily,averageLabel:'Average daily cost'})}</div></div>
     <div class="grid-2 equal mt">
       <div class="panel"><h3>Cost by model</h3><div class="desc">Current-rate token cost by model.</div>${hbars((data.models||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,modelColor,fmtUsd,14)}</div>
       <div class="panel"><h3>Cost by agent</h3><div class="desc">Current-rate token cost attributed to each recorded agent role.</div>${hbars((data.agents||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,agentColor,fmtUsd,14)}</div>
