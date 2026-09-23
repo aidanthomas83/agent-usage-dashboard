@@ -272,6 +272,7 @@ function renderSubscription(data){
     <div class="tab-title"><div><h2>Subscription value · API-equivalent token cost</h2><p>What the selected recorded token traffic would cost using the active Standard OpenAI API rate card.</p></div></div>
     <div class="kpis subscription-kpis">
       ${kpi('API-equivalent cost',fmtUsd(cost),`${pct(s.api_coverage_pct)} pricing coverage`,'var(--green)',n(s.api_coverage_pct)<95)}
+      ${kpi('Estimated Codex credits',fmtCredits(s.estimated_credits),`${pct(s.credit_coverage_pct)} credit-rate coverage`,'var(--teal)',n(s.credit_coverage_pct)<95)}
       ${kpi('Priced token volume',fmt(s.api_priced_tokens),`${fmt(s.total_tokens)} total tokens`,'var(--blue)')}
       ${kpi('Unpriced token volume',fmt(n(s.total_tokens)-n(s.api_priced_tokens)),n(s.api_coverage_pct)<100?'Excluded from cost rather than guessed':'Full pricing coverage','var(--amber)')}
       ${kpi('Long-context responses',fmtExact(s.long_context_responses),`>${fmt(pricing.long_context_threshold||272000)} input tokens`,'var(--purple)')}
