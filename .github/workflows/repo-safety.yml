@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax
-        run: python -m py_compile collect_codex_usage.py scripts/check_repo_safety.py
+        run: python -m py_compile collect_codex_usage.py server.py scripts/check_repo_safety.py
       - name: Check collector CLI
         run: python collect_codex_usage.py --help > /dev/null
       - name: Smoke-test collector
@@ -25,8 +25,33 @@ jobs:
           python collect_codex_usage.py --days 1 --codex-home /tmp/codex-empty --output-dir /tmp/codex-usage-smoke
       - name: Test legacy token-count telemetry
         run: python scripts/check_legacy_token_count.py
+      - name: Smoke-test local API server
+        run: |
+          python server.py --host 127.0.0.1 --port 8765 --data-dir /tmp/codex-usage-smoke --codex-home /tmp/codex-empty > /tmp/codex-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import json, time, urllib.request
+          for _ in range(30):
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=1) as r:
+                      assert json.load(r)["ok"] is True
+                  break
+              except Exception:
+                  time.sleep(.2)
+          else:
+              raise SystemExit("server did not become healthy")
+          with urllib.request.urlopen("http://127.0.0.1:8765/api/meta", timeout=2) as r:
+              payload=json.load(r)
+              assert "ready" in payload
+          with urllib.request.urlopen("http://127.0.0.1:8765/api/dashboard", timeout=2) as r:
+              payload=json.load(r)
+              assert "ready" in payload
+          PY
       - name: Check dashboard JavaScript syntax
         run: node scripts/check_dashboard_js.mjs
+      - name: Build Docker image
+        run: docker build -t agent-usage-dashboard:test .
       - name: Check tracked files for local telemetry and credentials
         run: python scripts/check_repo_safety.py
 
