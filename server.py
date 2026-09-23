@@ -407,8 +407,13 @@ def pricing_groups(
     filters: dict[str, str],
     dimensions: list[tuple[str, str]],
     pricing: dict[str, object],
+    extra_clause: str = "",
+    extra_values: list[object] | None = None,
 ):
     where, values = where_for(filters)
+    if extra_clause:
+        where += (" AND " if where else " WHERE ") + extra_clause
+        values.extend(extra_values or [])
     threshold = int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)
     dim_select = ", ".join(f"{expr} AS {alias}" for alias, expr in dimensions)
     dim_group = ", ".join(alias for alias, _ in dimensions)
@@ -812,7 +817,10 @@ def sessions_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
             }
 
             cost_rows = price_group_rows(
-                pricing_groups(conn, filters, [("session_id", "session_id")], pricing),
+                pricing_groups(
+                    conn, filters, [("session_id", "session_id")], pricing,
+                    f"session_id IN ({placeholders})", ids,
+                ),
                 ["session_id"], pricing,
             )
             cost_map = {str(r["session_id"]): r for r in cost_rows if str(r["session_id"]) in set(ids)}
