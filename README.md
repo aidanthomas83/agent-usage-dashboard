@@ -101,7 +101,7 @@ API token cost =
 + output × output rate
 ```
 
-The dashboard reports API-equivalent cost by **day, model, agent/role and session**, plus pricing coverage and the number of long-context responses.
+The dashboard reports API-equivalent cost by **day, model, agent/role and session**, plus pricing coverage and the number of long-context responses. `codex-auto-review` is estimated using the GPT-5.4 API token price as a proxy.
 
 This is a **token-only counterfactual**, not an API invoice. It excludes separately priced API services such as web-search calls, containers, storage, regional processing and other non-token tool charges. Rates are embedded so the local collector stays offline/reproducible; when OpenAI changes prices, the rate table should be updated.
 
