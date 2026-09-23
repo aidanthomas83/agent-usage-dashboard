@@ -164,8 +164,17 @@ SKILL_URI_RE = re.compile(r"skills://([^\s\"'`)]+?)/(?:skill|SKILL)\.md", re.IGN
 # shell/file read of .../skills/<name>/SKILL.md. We detect both without storing
 # prompt text, tool arguments, or file contents.
 SKILL_XML_RE = re.compile(r"<skill\b[^>]*>[\s\S]*?<name>\s*([^<]+?)\s*</name>[\s\S]*?</skill>", re.IGNORECASE)
-SKILL_PATH_RE = re.compile(r"(?:^|[\\/])skills[\\/](?:[^\\/\r\n\"'<>]+[\\/])*?([^\\/\r\n\"'<>]+)[\\/](?:SKILL|skill)\.md\b", re.IGNORECASE)
-MCP_CALL_RE = re.compile(r"(?:tools\.)?mcp__([A-Za-z0-9_]+)__([A-Za-z0-9_]+)")
+SKILL_PATH_RE = re.compile(r"(?:^|[\\/])skills[\\/](?:[^\\/\\r\\n\\\"\'<>]+[\\/])*?([^\\/\\r\\n\\\"\'<>]+)[\\/](?:SKILL|skill)\\.md\\b", re.IGNORECASE)
+# Codex desktop can persist a concise activity summary such as
+# "Read Codebase Memory skill" without exposing the underlying SKILL.md path.
+# Only treat these phrases as invocations when the name resolves to a configured
+# local skill; this avoids counting ordinary conversation text as skill usage.
+SKILL_ACTION_RE = re.compile(
+    r"\\b(?:read|load(?:ed)?|use(?:d|ing)?|invoke(?:d|ing)?|run|ran)\\s+"
+    r"(?:the\\s+)?[`\'\\\"]?([A-Za-z0-9][A-Za-z0-9 _./:+\\-]{0,120}?)[`\'\\\"]?\\s+skill\\b",
+    re.IGNORECASE,
+)
+MCP_CALL_RE = re.compile(r"(?:tools\\.)?mcp__([A-Za-z0-9_]+)__([A-Za-z0-9_]+)")
 
 
 def parse_args() -> argparse.Namespace:
