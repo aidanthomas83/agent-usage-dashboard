@@ -178,6 +178,39 @@ def main() -> int:
             {"started_utc": "2026-09-23T00:00:00Z", "completed_utc": "2026-09-23T00:00:10Z"},
             {"started_utc": "2026-09-23T00:00:05Z", "completed_utc": "2026-09-23T00:00:15Z"},
         ]) == 15000
+
+        # A parent lifecycle copied into a subagent rollout is one turn. A
+        # reused generic turn id at a different timestamp is still distinct.
+        copied = collector.dedupe_turns([
+            {
+                "thread_id": "main-thread", "turn_id": "turn-a", "agent_type": "Main",
+                "agent_role": "", "status": "completed",
+                "started_utc": "2026-08-07T00:00:00Z",
+                "completed_utc": "2026-08-07T00:10:00Z", "duration_ms": 600000,
+            },
+            {
+                "thread_id": "child-thread", "turn_id": "turn-a", "agent_type": "Subagent",
+                "agent_role": "executor", "status": "completed",
+                "started_utc": "2026-08-07T00:00:00Z",
+                "completed_utc": "2026-08-07T00:10:00Z", "duration_ms": 600000,
+            },
+            {
+                "thread_id": "child-2", "turn_id": "rollout-2", "agent_type": "Subagent",
+                "agent_role": "executor", "status": "completed",
+                "started_utc": "2026-08-07T01:00:00Z",
+                "completed_utc": "2026-08-07T01:01:00Z", "duration_ms": 60000,
+            },
+            {
+                "thread_id": "child-3", "turn_id": "rollout-2", "agent_type": "Subagent",
+                "agent_role": "reviewer", "status": "completed",
+                "started_utc": "2026-08-07T02:00:00Z",
+                "completed_utc": "2026-08-07T02:01:00Z", "duration_ms": 60000,
+            },
+        ])
+        assert len(copied) == 3, copied
+        canonical = [row for row in copied if row["turn_id"] == "turn-a"][0]
+        assert canonical["agent_type"] == "Main", canonical
+
         statuses = {row["name"]: row["status"] for row in activity["configured_skills"]}
         assert statuses["coding-standards"] == "used_selected", statuses
         assert statuses["unused-skill"] == "never_seen", statuses
