@@ -256,6 +256,36 @@ function sessionTable(sessions){
   return`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+function runtimeAgentTable(rows){
+  const data=[...(rows||[])].sort((a,b)=>n(b.agent_compute_ms)-n(a.agent_compute_ms));
+  if(!data.length)return'<div class="empty">No agent runtime data for this selection.</div>';
+  const body=data.map(x=>`<tr>
+    <td>${esc(x.name||'Unknown')}</td>
+    <td class="num">${fmtDuration(x.agent_compute_ms)}</td>
+    <td class="num">${fmtDuration(x.active_wall_ms)}</td>
+    <td class="num">${n(x.parallelism_factor).toFixed(2)}×</td>
+    <td class="num">${fmtExact(x.turns)}</td>
+    <td class="num">${fmtUsd(x.api_cost)}</td>
+    <td class="num">${fmtUsd(x.cost_per_agent_hour)}</td>
+    <td class="num">${fmtUsd(x.cost_per_active_hour)}</td>
+  </tr>`).join('');
+  return`<div class="table-wrap"><table><thead><tr>
+    <th>Agent / role</th><th class="num">Compute time</th><th class="num">Active wall time</th>
+    <th class="num">Parallelism</th><th class="num">Turns</th><th class="num">API cost</th>
+    <th class="num">Cost / agent-hour</th><th class="num">Cost / active hour</th>
+  </tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function mcpToolTable(rows){
+  const data=[...(rows||[])].sort((a,b)=>n(b.calls)-n(a.calls)||String(a.mcp||'').localeCompare(String(b.mcp||''))||String(a.tool||'').localeCompare(String(b.tool||'')));
+  if(!data.length)return'<div class="empty">No attributable MCP tool calls were found in this selection.</div>';
+  const body=data.slice(0,80).map(x=>`<tr>
+    <td>${esc(x.mcp||'Unknown')}</td><td><code>${esc(x.tool||'Unknown')}</code></td>
+    <td class="num"><b>${fmtExact(x.calls)}</b></td><td class="num">${n(x.duration_ms)?fmtDuration(x.duration_ms):'—'}</td>
+  </tr>`).join('');
+  return`<div class="table-wrap"><table><thead><tr><th>MCP integration</th><th>Tool</th><th class="num">Calls</th><th class="num">Recorded time</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
 function renderToken(data){
   const s=data.summary||{},total=n(s.total_tokens);
   return`
@@ -289,6 +319,7 @@ function pricingTable(pricing){
 
 function renderSubscription(data){
   const s=data.summary||{},pricing=data.pricing||{},cost=n(s.api_cost),viewDays=selectedCalendarDays(),avgDaily=viewDays?cost/viewDays:0;
+  const rs=data.runtime_summary||{},runtimeAgents=data.runtime_agents||[];
   return`
     <div class="tab-title"><div><h2>Subscription value · API-equivalent token cost</h2><p>What the selected recorded token traffic would cost using the active Standard OpenAI API rate card.</p></div></div>
     <div class="kpis subscription-kpis">
@@ -299,10 +330,24 @@ function renderSubscription(data){
       ${kpi('Unpriced token volume',fmt(n(s.total_tokens)-n(s.api_priced_tokens)),n(s.api_coverage_pct)<100?'Excluded from cost rather than guessed':'Full pricing coverage','var(--amber)')}
       ${kpi('Long-context responses',fmtExact(s.long_context_responses),`>${fmt(pricing.long_context_threshold||272000)} input tokens`,'var(--purple)')}
     </div>
+    <div class="section-kicker mt">Runtime value</div>
+    <div class="kpis runtime-kpis subscription-runtime-kpis">
+      ${kpi('Agent compute time',fmtDuration(rs.agent_compute_ms),'Sum of agent turn durations · comparable to machine work-hours, not human effort','var(--blue)')}
+      ${kpi('Active wall-clock time',fmtDuration(rs.active_wall_ms),'Elapsed time with at least one agent running','#9aa4b2')}
+      ${kpi('Parallelism',n(rs.parallelism_factor).toFixed(2)+'×','Compute time ÷ active wall-clock time','var(--purple)')}
+      ${kpi('Cost / agent-hour',fmtUsd(rs.cost_per_agent_hour),'API-equivalent cost ÷ cumulative agent compute hours','var(--green)')}
+      ${kpi('Cost / active hour',fmtUsd(rs.cost_per_active_hour),'API-equivalent cost ÷ active wall-clock hours','var(--teal)')}
+      ${kpi('Runtime coverage',pct(rs.duration_coverage_pct),`${pct(rs.interval_coverage_pct)} with start/end timestamps`,'var(--orange)',n(rs.duration_coverage_pct)<95)}
+    </div>
     <div class="panel full-panel"><h3>API-equivalent cost by day</h3><div class="desc">Full-width daily cost by model. Hover any day for the model split.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[],'api_cost','usd',{average:avgDaily,averageLabel:'Average daily cost'})}</div></div>
     <div class="grid-2 equal mt">
       <div class="panel"><h3>Cost by model</h3><div class="desc">Current-rate token cost by model.</div>${hbars((data.models||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,modelColor,fmtUsd,14)}</div>
       <div class="panel"><h3>Cost by agent</h3><div class="desc">Current-rate token cost attributed to each recorded agent role.</div>${hbars((data.agents||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,agentColor,fmtUsd,14)}</div>
+    </div>
+    <div class="panel full-panel mt">
+      <h3>Runtime and cost by agent</h3>
+      <div class="desc">Compute time adds concurrent turns; active wall time merges overlap within each role. This makes agent processing hours visible alongside the equivalent API spend without treating an agent-hour as equal to a human developer-hour.</div>
+      ${runtimeAgentTable(runtimeAgents)}
     </div>
     <div class="panel mt">
       <div class="pricing-head">
@@ -383,14 +428,30 @@ function renderActivity(data){
 
     <div class="panel full-panel mt"><h3>Tokens by model</h3><div class="desc">Total token traffic by model over time.</div><div class="chart activity-chart-large">${lineChart(data.daily_models||[],'model','total_tokens',modelColor,{height:380,maxSeries:8})}</div></div>
     <div class="panel full-panel mt"><h3>Turns by model</h3><div class="desc">Recorded task/turn volume by model over time.</div><div class="chart activity-chart-large">${lineChart(data.turns_by_model||[],'model','turns',modelColor,{height:380,maxSeries:8})}</div></div>
+
+    <div class="panel full-panel mt">
+      <h3>MCP integrations and tool calls</h3>
+      <div class="desc">Completed MCP activity grouped by integration and tool. Current Codex typed MCP events are preferred; older rollouts fall back to attributable MCP call records.</div>
+      <div class="grid-2 equal mcp-grid">
+        <div>
+          <h3>Calls by MCP integration</h3>
+          ${hbars((data.mcp_integrations||[]).map(x=>({name:x.name,total_tokens:x.calls})),(data.mcp_integrations||[]).reduce((a,x)=>a+n(x.calls),0),agentColor,fmtExact,16)}
+        </div>
+        <div>
+          <h3>MCP tool calls</h3>
+          ${mcpToolTable(data.mcp_tools||[])}
+        </div>
+      </div>
+    </div>
+
     <div class="panel activity-skills">
       <h3>Skill invocations over time</h3>
-      <div class="desc">All ${fmtExact(inv)} invocations across ${fmtExact(distinct)} distinct skills are represented. Skill detection remains best-effort while current Codex skill-read events are being validated.</div>
+      <div class="desc">All ${fmtExact(inv)} qualifying invocations across ${fmtExact(distinct)} distinct skills are represented. Detection follows concrete SKILL.md reads, skill-owned script execution, first-class skills.read calls and compatible historical signals.</div>
       <div class="skill-summary">${mini('Skill invocations',fmtExact(inv),'Total invocations in selection')}${mini('Distinct skills',fmtExact(distinct),'Unique observed skill names')}</div>
       <div class="chart skill-chart">${collapsed.length?lineChart(collapsed,'name','value',skillColor,{height:360,maxSeries:20}):'<div class="empty">No attributable skill invocations were found in this selection.</div>'}</div>
       <div class="grid-2 equal mt">
         <div><h3>Most-used skills</h3><div class="desc">Invocation count; this reconciles to the chart total.</div>${hbars(skills.map(x=>({...x,total_tokens:x.value})),inv,skillColor,fmtExact,15)}</div>
-        <div><h3>Configured skills</h3><div class="desc">Skills found beneath the mounted .codex/skills directory. Current skill-read telemetry is still being validated, so “not observed” should not yet be read as “not used”.</div>${statusPills(data.configured_skills||[],'No configured skills were found in .codex/skills.')}</div>
+        <div><h3>Configured skills</h3><div class="desc">Skills found beneath the mounted .codex/skills directory. “Not observed” means no qualifying invocation signal was found in the selected data.</div>${statusPills(data.configured_skills||[],'No configured skills were found in .codex/skills.')}</div>
       </div>
     </div>
     <div class="data-note">${esc(data.code_metric_note||'')}</div>
