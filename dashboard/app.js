@@ -186,11 +186,7 @@ function stackedDaily(data,valueKey='total_tokens',mode='tokens',options={}){
   const W=1200,H=350,L=68,R=18,T=18,B=45,pw=W-L-R,ph=H-T-B,max=Math.max(...dateTotals.values(),avg,1),step=pw/dates.length,bw=Math.min(52,Math.max(3,step*.68));
   const y=v=>T+ph-v/max*ph;let svg=`<svg viewBox="0 0 ${W} ${H}">`;
   for(let i=0;i<=4;i++){const v=max*i/4,yy=y(v);svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}"/><text class="axis-label" x="${L-8}" y="${yy+3}" text-anchor="end">${mode==='usd'?fmtUsd(v):fmt(v)}</text>`;}
-  if(avg>0){
-    const yy=y(avg),avgColor='#b45309';
-    svg+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="${avgColor}" stroke-width="2" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>`;
-    svg+=`<text class="axis-label" x="${W-R-2}" y="${Math.max(T+11,yy-6)}" text-anchor="end" fill="${avgColor}">${esc(avgLabel)} ${mode==='usd'?fmtUsd(avg):fmt(avg)}</text>`;
-  }
+  const avgColor='#b8c0ca';
   const tickEvery=Math.max(1,Math.ceil(dates.length/12));
   dates.forEach((d,i)=>{
     const x=L+i*step+(step-bw)/2;let acc=0;
@@ -198,10 +194,15 @@ function stackedDaily(data,valueKey='total_tokens',mode='tokens',options={}){
     const rows=data.filter(x=>x.date===d),total=rows.reduce((a,x)=>a+n(x[valueKey]),0);
     const items=mode==='tokens'?
       [{label:'Total',value:fmtExact(total),color:'#5f6b78'},{label:'Cached input',value:fmtExact(rows.reduce((a,x)=>a+n(x.cached_input_tokens),0)),color:'#159a8c'},{label:'Fresh input',value:fmtExact(rows.reduce((a,x)=>a+n(x.fresh_input_tokens),0)),color:'#ee8726'},{label:'Output',value:fmtExact(rows.reduce((a,x)=>a+n(x.output_tokens),0)),color:'#e85d9e'},...rows.map(x=>({label:x.model,value:fmtExact(x[valueKey]),color:modelColor(x.model)}))]:
-      [{label:'API-equivalent cost',value:fmtUsd(total),color:'#37ae69'},...(avg>0?[{label:avgLabel,value:fmtUsd(avg),color:'#b45309'}]:[]),...rows.map(x=>({label:x.model,value:fmtUsd(x[valueKey]),color:modelColor(x.model)}))];
+      [{label:'API-equivalent cost',value:fmtUsd(total),color:'#37ae69'},...(avg>0?[{label:avgLabel,value:fmtUsd(avg),color:avgColor}]:[]),...rows.map(x=>({label:x.model,value:fmtUsd(x[valueKey]),color:modelColor(x.model)}))];
     svg+=`<rect x="${L+i*step}" y="${T}" width="${step}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/>`;
     if(i===0||i===dates.length-1||i%tickEvery===0)svg+=`<text class="axis-label" x="${L+i*step+step/2}" y="${H-13}" text-anchor="middle">${axisDate(d)}</text>`;
   });
+  // Draw the average after the bars so it always remains visible.
+  if(avg>0){
+    const yy=y(avg);
+    svg+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="${avgColor}" stroke-width="2.5" stroke-dasharray="8 6" vector-effect="non-scaling-stroke"/>`;
+  }
   svg+='</svg>';
   const avgLegend=avg>0?`<div class="legend"><span class="legend-item"><span class="avg-line-swatch"></span>${esc(avgLabel)} · ${mode==='usd'?fmtUsd(avg):fmt(avg)}</span></div>`:'';
   return svg+legend(models,modelColor)+avgLegend;
@@ -285,6 +286,7 @@ function renderSubscription(data){
     <div class="tab-title"><div><h2>Subscription value · API-equivalent token cost</h2><p>What the selected recorded token traffic would cost using the active Standard OpenAI API rate card.</p></div></div>
     <div class="kpis subscription-kpis">
       ${kpi('API-equivalent cost',fmtUsd(cost),`${pct(s.api_coverage_pct)} pricing coverage`,'var(--green)',n(s.api_coverage_pct)<95)}
+      ${kpi('Average daily cost',fmtUsd(avgDaily),`${viewDays} calendar day${viewDays===1?'':'s'} in viewed range`,'#b8c0ca')}
       ${kpi('Estimated Codex credits',fmtCredits(s.estimated_credits),`${pct(s.credit_coverage_pct)} credit-rate coverage`,'var(--teal)',n(s.credit_coverage_pct)<95)}
       ${kpi('Priced token volume',fmt(s.api_priced_tokens),`${fmt(s.total_tokens)} total tokens`,'var(--blue)')}
       ${kpi('Unpriced token volume',fmt(n(s.total_tokens)-n(s.api_priced_tokens)),n(s.api_coverage_pct)<100?'Excluded from cost rather than guessed':'Full pricing coverage','var(--amber)')}
