@@ -155,6 +155,34 @@ LIMIT_FLOAT_FIELDS = {"primary_used_pct", "secondary_used_pct"}
 
 AGENT_FIELDS = ["name", "description", "model", "reasoning_effort", "sandbox_mode", "config_file"]
 
+# The CSVs retain the full analytical schema. The browser bundle is intentionally
+# narrower because repeating dozens of JSON keys/IDs for large historical scans
+# can make Chromium/Edge crash while parsing a local file.
+BROWSER_RECORD_FIELDS = [
+    "date", "timestamp_local", "session_id", "session_name", "thread_id", "thread_name",
+    "thread_start_local", "thread_latest_local", "thread_source",
+    "agent_type", "agent_role", "agent_label", "project", "model", "reasoning_effort",
+    "is_compaction", "input_tokens", "cached_input_tokens", "fresh_input_tokens",
+    "output_tokens", "reasoning_output_tokens", "total_tokens",
+    "estimated_credits", "credit_rate_status", "api_equivalent_cost_usd",
+    "api_cost_rate_status", "api_long_context",
+]
+BROWSER_TURN_FIELDS = [
+    "date", "session_id", "thread_id", "agent_type", "agent_role", "agent_label",
+    "project", "model", "reasoning_effort", "status", "duration_ms",
+    "time_to_first_token_ms", "context_utilization_pct",
+]
+BROWSER_ACTIVITY_FIELDS = [
+    "date", "session_id", "thread_id", "project", "agent_type", "agent_role",
+    "agent_label", "model", "reasoning_effort", "activity_type", "tool_name",
+    "tool_category", "plugin_name", "skill_name", "call_id", "lines_changed",
+]
+BROWSER_LIMIT_FIELDS = [
+    "date", "timestamp_utc", "model", "primary_used_pct", "secondary_used_pct",
+]
+BROWSER_AGENT_FIELDS = ["name"]
+
+
 SKILL_URI_RE = re.compile(r"skills://([^\s\"'`)]+?)/(?:skill|SKILL)\.md", re.IGNORECASE)
 # Explicit Codex skill injection can be persisted as a structured <skill> fragment
 # rather than a tool call. Implicit invocation is often only visible as a generic
@@ -1231,12 +1259,70 @@ def daily_summary(records: list[dict[str, Any]], turns: list[dict[str, Any]], ac
 
 
 def write_dashboard_data(path: Path, records: list[dict[str, Any]], turns: list[dict[str, Any]], activities: list[dict[str, Any]], limits: list[dict[str, Any]], metadata: dict[str, Any], configured_agents: list[dict[str, str]]) -> None:
+    """Write a compact dictionary-encoded browser bundle.
+
+    Canonical CSV files remain full fidelity. This bundle contains only fields
+    consumed by dashboard/index.html and dictionary-encodes strings so large
+    historical scans do not produce a huge object-literal script.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"metadata":metadata,"records":records,"turns":turns,"activities":activities,"rate_limits":limits,"configured_agents":configured_agents}
+
+    strings = [""]
+    string_ids: dict[str, int] = {"": 0}
+
+    def string_id(value: Any) -> int:
+        text = "" if value is None else str(value)
+        existing = string_ids.get(text)
+        if existing is not None:
+            return existing
+        idx = len(strings)
+        strings.append(text)
+        string_ids[text] = idx
+        return idx
+
+    def pack(
+        rows: list[dict[str, Any]],
+        fields: list[str],
+        numeric_fields: set[str],
+    ) -> dict[str, Any]:
+        packed_rows: list[list[Any]] = []
+        numeric_indexes = {i for i, field in enumerate(fields) if field in numeric_fields}
+        for row in rows:
+            values: list[Any] = []
+            for i, field in enumerate(fields):
+                value = row.get(field, "")
+                if i in numeric_indexes:
+                    values.append(value if isinstance(value, (int, float)) else to_float(value))
+                else:
+                    values.append(string_id(value))
+            # Missing trailing fields decode to 0/empty, so trim them aggressively.
+            while values and values[-1] == 0:
+                values.pop()
+            packed_rows.append(values)
+        return {
+            "fields": fields,
+            "numeric": sorted(numeric_indexes),
+            "rows": packed_rows,
+        }
+
+    payload = {
+        "packed": 2,
+        "metadata": metadata,
+        "strings": strings,  # replaced after pack() has populated the table
+        "records": pack(records, BROWSER_RECORD_FIELDS, RECORD_INT_FIELDS | RECORD_FLOAT_FIELDS),
+        "turns": pack(turns, BROWSER_TURN_FIELDS, TURN_INT_FIELDS | TURN_FLOAT_FIELDS),
+        "activities": pack(activities, BROWSER_ACTIVITY_FIELDS, ACTIVITY_INT_FIELDS),
+        "rate_limits": pack(limits, BROWSER_LIMIT_FIELDS, LIMIT_INT_FIELDS | LIMIT_FLOAT_FIELDS),
+        "configured_agents": pack(configured_agents, BROWSER_AGENT_FIELDS, set()),
+    }
+    payload["strings"] = strings
+
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
-        f.write("window.CODEX_USAGE_DATA = "); json.dump(payload,f,ensure_ascii=False,separators=(",",":")); f.write(";\n")
-    os.replace(tmp,path)
+        f.write("window.CODEX_USAGE_DATA=")
+        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        f.write(";\n")
+    os.replace(tmp, path)
 
 
 def main() -> int:
