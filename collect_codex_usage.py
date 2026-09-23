@@ -1209,24 +1209,54 @@ def parse_rollout(
                 "total_tokens": to_int(total_usage.get("total_tokens")),
             }
 
-            # Always advance the cumulative baseline, including events outside
-            # the selected window. That makes the first in-range delta correct.
-            if previous_cumulative is None:
-                delta = dict(current_cumulative)
+            # Legacy token_count events contain both a cumulative total and the
+            # usage for the most recent response. Use the cumulative total only
+            # as a change detector: forked/resumed rollouts can begin with a
+            # large inherited cumulative total, and cumulative counters can
+            # reset. Materialising a subtraction therefore either double-counts
+            # inherited history or drops the request at a reset. The persisted
+            # last_token_usage is the per-response value we actually want.
+            previous_snapshot = previous_cumulative
+            cumulative_changed = (
+                previous_snapshot is None
+                or any(
+                    current_cumulative[k] != previous_snapshot.get(k, 0)
+                    for k in current_cumulative
+                )
+            )
+            previous_cumulative = current_cumulative
+
+            last_usage = info.get("last_token_usage") if isinstance(info, dict) else None
+            usage: dict[str, int]
+            usage_source = "token_count_last_usage"
+            if isinstance(last_usage, dict):
+                usage = {
+                    "input_tokens": to_int(last_usage.get("input_tokens")),
+                    "cached_input_tokens": to_int(last_usage.get("cached_input_tokens")),
+                    "cache_write_input_tokens": to_int(last_usage.get("cache_write_input_tokens", last_usage.get("cache_creation_input_tokens", 0))),
+                    "output_tokens": to_int(last_usage.get("output_tokens")),
+                    "reasoning_output_tokens": to_int(last_usage.get("reasoning_output_tokens")),
+                    "total_tokens": to_int(last_usage.get("total_tokens")),
+                }
+            elif previous_snapshot is None:
+                # Very old rollouts may omit last_token_usage. Keep the prior
+                # fallback for those files, but mark it separately because the
+                # first cumulative snapshot cannot be independently verified.
+                usage = dict(current_cumulative)
+                usage_source = "token_count_cumulative_fallback"
             else:
-                delta = {
-                    k: max(0, current_cumulative[k] - previous_cumulative.get(k, 0))
+                usage = {
+                    k: max(0, current_cumulative[k] - previous_snapshot.get(k, 0))
                     for k in current_cumulative
                 }
-            cumulative_advanced = any(current_cumulative[k] > (previous_cumulative or {}).get(k, 0) for k in current_cumulative)
-            previous_cumulative = current_cumulative
+                usage_source = "token_count_delta_fallback"
 
             ts_utc = parse_iso(item.get("timestamp"))
             # Once a rollout starts emitting direct per-response telemetry,
-            # prefer it and stop materialising cumulative token_count deltas.
+            # prefer it and stop materialising legacy token_count usage.
             if not ts_utc or (first_direct_usage_utc is not None and ts_utc >= first_direct_usage_utc):
                 continue
-            if not cumulative_advanced or delta["total_tokens"] <= 0:
+            if not cumulative_changed or usage["total_tokens"] <= 0:
                 continue
 
             ts_local = ts_utc.astimezone(local_tz)
@@ -1241,12 +1271,12 @@ def parse_rollout(
             if not thread_id:
                 continue
 
-            inp = delta["input_tokens"]
-            cached = delta["cached_input_tokens"]
-            cache_write = delta["cache_write_input_tokens"]
-            out = delta["output_tokens"]
-            reasoning = delta["reasoning_output_tokens"]
-            total = delta["total_tokens"] or inp + out
+            inp = usage["input_tokens"]
+            cached = usage["cached_input_tokens"]
+            cache_write = usage["cache_write_input_tokens"]
+            out = usage["output_tokens"]
+            reasoning = usage["reasoning_output_tokens"]
+            total = usage["total_tokens"] or inp + out
             fresh = max(0, inp - cached)
             credits, rate_status = estimate_credits(ctx.get("model", ""), fresh, cached, out, ctx.get("service_tier", ""))
             api_cost, api_status, api_long = estimate_api_cost(ctx.get("model", ""), inp, cached, cache_write, out)
@@ -1271,7 +1301,7 @@ def parse_rollout(
                 "estimated_credits": round(credits, 6), "credit_rate_status": rate_status,
                 "api_equivalent_cost_usd": round(api_cost, 6), "api_cost_rate_status": api_status,
                 "api_long_context": "true" if api_long else "false",
-                "usage_source": "token_count_delta", "source_rollout": rel,
+                "usage_source": usage_source, "source_rollout": rel,
             })
 
         elif typ == "token_usage_record":
