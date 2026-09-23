@@ -1,0 +1,20 @@
+services:
+  dashboard:
+    build:
+      context: .
+    container_name: agent-usage-dashboard
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      CODEX_HOME: /codex
+      DATA_DIR: /app/data
+      DASHBOARD_PORT: "8765"
+    volumes:
+      - type: bind
+        source: ${USERPROFILE}/.codex
+        target: /codex
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /app/data
+    restart: unless-stopped
