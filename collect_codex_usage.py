@@ -727,6 +727,33 @@ def call_diff_text(payload: dict[str, Any]) -> str:
     return raw
 
 
+def duration_value_ms(value: Any) -> int:
+    """Parse the duration shapes Codex has used for persisted turn/tool items."""
+    if isinstance(value, dict):
+        if "duration_ms" in value:
+            return max(0, to_int(value.get("duration_ms")))
+        if "millis" in value:
+            return max(0, to_int(value.get("millis")))
+        secs = to_float(value.get("secs", value.get("seconds", 0)))
+        nanos = to_float(value.get("nanos", value.get("nanoseconds", 0)))
+        if secs or nanos:
+            return max(0, int(round(secs * 1000.0 + nanos / 1_000_000.0)))
+    if isinstance(value, (int, float)):
+        # Rust Duration is normally persisted as an object/string; treat bare
+        # numeric values as milliseconds when encountered.
+        return max(0, int(round(float(value))))
+    text = str(value or "").strip().lower()
+    if not text:
+        return 0
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*(ms|s|m)", text)
+    if not match:
+        return 0
+    amount = float(match.group(1))
+    unit = match.group(2)
+    factor = 1.0 if unit == "ms" else (1000.0 if unit == "s" else 60_000.0)
+    return max(0, int(round(amount * factor)))
+
+
 def count_diff_lines(text: str) -> tuple[int, int]:
     added = deleted = 0
     for line in str(text or "").splitlines():
@@ -827,6 +854,17 @@ def parse_rollout(
     # Tool call lifecycle staging.
     calls: dict[str, dict[str, Any]] = {}
     call_order: list[str] = []
+    # Current Codex persists completed MCP calls as typed item_completed events.
+    # If those are present, prefer them over older text-scanned orchestration
+    # fallbacks so the same MCP call is not counted twice.
+    has_typed_mcp_items = any(
+        item.get("type") == "event_msg"
+        and isinstance(item.get("payload"), dict)
+        and str(item["payload"].get("type") or "") == "item_completed"
+        and isinstance(item["payload"].get("item"), dict)
+        and str(item["payload"]["item"].get("type") or "").lower() == "mcptoolcall"
+        for item in items
+    )
     skill_events: list[dict[str, Any]] = []
     plugin_events: list[dict[str, Any]] = []
     seen_skill_events: set[tuple[str, str]] = set()
@@ -948,6 +986,47 @@ def parse_rollout(
                     if tid in turn_context:
                         t.update(turn_context[tid])
                 continue
+            if et == "item_completed":
+                completed_item = payload.get("item") or {}
+                if isinstance(completed_item, dict) and str(completed_item.get("type") or "").lower() == "mcptoolcall":
+                    cid = str(completed_item.get("id") or payload.get("call_id") or "")
+                    server = str(completed_item.get("server") or "").strip()
+                    tool = str(completed_item.get("tool") or "").strip()
+                    if cid and server and tool and ts_utc:
+                        tid = str(payload.get("turn_id") or active_turn_id)
+                        ctx = turn_context.get(tid, current_ctx)
+                        duration_ms = duration_value_ms(completed_item.get("duration"))
+                        start_utc = ts_utc - timedelta(milliseconds=duration_ms) if duration_ms else ts_utc
+                        existing = calls.get(cid)
+                        if existing is None:
+                            calls[cid] = {
+                                "call_id": cid,
+                                "name": tool,
+                                "category": server,
+                                "plugin": server,
+                                "start_utc": start_utc,
+                                "end_utc": ts_utc,
+                                "turn_id": tid,
+                                "model": ctx.get("model", ""),
+                                "effort": ctx.get("effort", ""),
+                                "service_tier": ctx.get("service_tier", ""),
+                                "status": str(completed_item.get("status") or "completed").lower(),
+                                "lines_added": 0,
+                                "lines_deleted": 0,
+                            }
+                            call_order.append(cid)
+                        else:
+                            existing.update({
+                                "name": tool or existing.get("name", ""),
+                                "category": server or existing.get("category", ""),
+                                "plugin": server or existing.get("plugin", ""),
+                                "end_utc": ts_utc,
+                                "turn_id": tid or existing.get("turn_id", ""),
+                                "status": str(completed_item.get("status") or existing.get("status") or "completed").lower(),
+                            })
+                            if duration_ms:
+                                existing["start_utc"] = start_utc
+                continue
             if et == "token_count":
                 rate = payload.get("rate_limits") or {}
                 info = payload.get("info") or {}
@@ -1039,8 +1118,9 @@ def parse_rollout(
                 call_order.append(cid)
 
                 # Recover plugin/skill use hidden inside functions.exec / code-mode orchestration.
-                for m in MCP_CALL_RE.finditer(text):
-                    plugin_events.append({"call_id": cid, "plugin": m.group(1).replace("_", " "), "tool": m.group(2), "turn_id": item_turn, "timestamp": ts_utc, "ctx": dict(ctx)})
+                if not has_typed_mcp_items:
+                    for m in MCP_CALL_RE.finditer(text):
+                        plugin_events.append({"call_id": cid, "plugin": m.group(1).replace("_", " "), "tool": m.group(2), "turn_id": item_turn, "timestamp": ts_utc, "ctx": dict(ctx)})
                 seen_skills: set[str] = set()
 
                 # Newer Codex builds expose a first-class skills.read tool.
