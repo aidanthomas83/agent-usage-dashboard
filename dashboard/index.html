@@ -101,12 +101,11 @@ function matches(r,state=filterState()){const d=String(r.date||'');return(!state
 function filteredRows(state=filterState()){return rows.filter(r=>matches(r,state))}
 function filteredTurns(state=filterState()){return turns.filter(r=>matches(r,state))}
 function filteredActivities(state=filterState()){return activities.filter(r=>matches(r,state))}
+let activeQuickRange=0;
 function quickRangeStart(days){const requested=shiftIsoDate(DATA_MAX,-(days-1));return DATA_MIN&&requested<DATA_MIN?DATA_MIN:requested}
 function updateQuickRangeState(){
-  const state=filterState();
   document.querySelectorAll('.quick-range').forEach(btn=>{
-    const days=Number(btn.dataset.days||0);
-    btn.classList.toggle('active',!!days&&state.to===DATA_MAX&&state.from===quickRangeStart(days));
+    btn.classList.toggle('active',Number(btn.dataset.days||0)===activeQuickRange);
   });
 }
 function updateRangeStatus(filteredCount=0){
@@ -116,6 +115,7 @@ function updateRangeStatus(filteredCount=0){
 }
 function setQuickRange(days){
   if(!DATA_MAX)return;
+  activeQuickRange=days;
   $('fromDate').value=quickRangeStart(days);
   $('toDate').value=DATA_MAX;
   updateQuickRangeState();
@@ -266,10 +266,10 @@ const tip=$('tooltip');
 function renderTip(raw){try{const data=JSON.parse(raw||'{}'),items=Array.isArray(data.items)?data.items:[];tip.innerHTML=`${data.title?`<div class="tip-title">${esc(data.title)}</div>`:''}${items.map((item,i)=>`${i&&item.divider?'<div class="tip-divider"></div>':''}<div class="tip-row"><span class="tip-swatch" style="--tip-color:${escAttr(item.color||'var(--muted)')}"></span><span>${esc(item.label||'')}</span><span class="tip-value">${esc(item.value??'')}</span></div>`).join('')}`;return true}catch{return false}}
 document.addEventListener('mousemove',e=>{const t=e.target.closest?.('[data-tip-json],[data-tip]');if(!t){tip.style.display='none';return}if(t.hasAttribute('data-tip-json'))renderTip(t.getAttribute('data-tip-json'));else tip.textContent=t.getAttribute('data-tip');tip.style.display='block';let x=e.clientX+14,y=e.clientY+14;tip.style.left=x+'px';tip.style.top=y+'px';const r=tip.getBoundingClientRect();if(r.right>innerWidth-8)tip.style.left=(e.clientX-r.width-14)+'px';if(r.bottom>innerHeight-8)tip.style.top=(e.clientY-r.height-14)+'px'});document.addEventListener('mouseleave',()=>tip.style.display='none');
 let renderRaf=0;function queueRender(){cancelAnimationFrame(renderRaf);renderRaf=requestAnimationFrame(render)}
-['fromDate','toDate'].forEach(id=>{const el=$(id);const apply=()=>{normalizeDateInputs(id);queueRender()};el.addEventListener('input',apply);el.addEventListener('change',apply);el.addEventListener('blur',apply)});
+['fromDate','toDate'].forEach(id=>{const el=$(id);const apply=()=>{activeQuickRange=0;normalizeDateInputs(id);queueRender()};el.addEventListener('input',apply);el.addEventListener('change',apply);el.addEventListener('blur',apply)});
 ['modelFilter','agentFilter','effortFilter','projectFilter'].forEach(id=>{const el=$(id);el.addEventListener('input',queueRender);el.addEventListener('change',queueRender)});
 document.querySelectorAll('.quick-range').forEach(btn=>btn.addEventListener('click',()=>setQuickRange(Number(btn.dataset.days||0))));
-$('resetBtn').addEventListener('click',()=>{initFilters();queueRender()});initFilters();normalizeDateInputs();render();
+$('resetBtn').addEventListener('click',()=>{activeQuickRange=0;initFilters();queueRender()});initFilters();activeQuickRange=0;normalizeDateInputs();render();
 })();
 </script>
 </body>
