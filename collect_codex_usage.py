@@ -1392,8 +1392,9 @@ def write_sqlite_snapshot(
             return
         placeholders = ",".join("?" for _ in fields)
         values = [[row.get(field, 0 if field in ints or field in floats else "") for field in fields] for row in rows]
+        column_names = ",".join(f'"{field}"' for field in fields)
         conn.executemany(
-            f'INSERT INTO "{table}" ({",".join(f""""{field}"""" for field in fields)}) VALUES ({placeholders})',
+            f'INSERT INTO "{table}" ({column_names}) VALUES ({placeholders})',
             values,
         )
 
