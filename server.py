@@ -814,11 +814,16 @@ def insights_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                            COALESCE(SUM(fresh_input_tokens),0) fresh_input_tokens,
                            COALESCE(AVG(input_tokens),0) avg_input,
                            COALESCE(SUM(CASE WHEN is_compaction='true' THEN total_tokens ELSE 0 END),0) compaction_tokens,
-                           COALESCE(SUM(CASE WHEN is_compaction='true' THEN estimated_credits ELSE 0 END),0) compaction_credits
+                           COALESCE(SUM(CASE WHEN is_compaction='true' THEN estimated_credits ELSE 0 END),0) compaction_credits,
+                           SUM(CASE WHEN usage_source='token_usage_record' THEN 1 ELSE 0 END) direct_usage_responses
                       FROM responses{where}""",
                 values,
             ).fetchone())
             summary["p95_input"] = percentile(conn, "responses", "input_tokens", where, values, .95)
+            summary["compaction_attribution_coverage_pct"] = (
+                float(summary["direct_usage_responses"] or 0) / float(summary["responses"] or 1) * 100.0
+                if summary["responses"] else 0.0
+            )
             fresh = float(summary["fresh_input_tokens"] or 0)
             summary["context_amplification"] = float(summary["input_tokens"] or 0) / fresh if fresh else 0.0
 
