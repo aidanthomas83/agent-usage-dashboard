@@ -14,6 +14,8 @@ import threading
 import traceback
 import urllib.request
 import uuid
+
+import collect_codex_usage as collector
 from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -932,32 +934,82 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
     return True, refresh_status()
 
 
-def database_has_current_schema(data_dir: Path) -> bool:
-    conn = open_db(data_dir)
-    if conn is None:
-        return False
+def migrate_existing_database(data_dir: Path, codex_home: Path) -> None:
+    """Apply lightweight schema/index upgrades without rebuilding historical telemetry."""
+    path = db_path(data_dir)
+    if not path.exists():
+        return
+    conn = sqlite3.connect(path, timeout=30)
     try:
+        conn.execute("PRAGMA busy_timeout=30000")
         names = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        return {"responses", "turns", "activities", "configured_agents", "configured_skills", "metadata"} <= names
-    except sqlite3.Error:
-        return False
+        required = {"responses", "turns", "activities", "configured_agents", "metadata"}
+        if not required <= names:
+            return
+
+        conn.execute('CREATE TABLE IF NOT EXISTS configured_skills ("name" TEXT, "skill_file" TEXT)')
+        skills = collector.load_configured_skills(codex_home, False) if codex_home.exists() else []
+        conn.execute("DELETE FROM configured_skills")
+        if skills:
+            conn.executemany(
+                'INSERT INTO configured_skills ("name","skill_file") VALUES (?,?)',
+                [(str(row.get("name") or ""), str(row.get("skill_file") or "")) for row in skills],
+            )
+
+        indexes = [
+            ("idx_responses_date", "responses", "date"),
+            ("idx_responses_model", "responses", "model"),
+            ("idx_responses_agent", "responses", "agent_type, agent_role, agent_label"),
+            ("idx_responses_effort", "responses", "reasoning_effort"),
+            ("idx_responses_project", "responses", "project"),
+            ("idx_responses_session", "responses", "session_id"),
+            ("idx_responses_date_session", "responses", "date, session_id"),
+            ("idx_responses_thread", "responses", "thread_id"),
+            ("idx_responses_dashboard", "responses", "date, model, agent_type, agent_role, reasoning_effort, project"),
+            ("idx_turns_date", "turns", "date"),
+            ("idx_turns_session", "turns", "session_id"),
+            ("idx_turns_date_session", "turns", "date, session_id"),
+            ("idx_turns_model", "turns", "model"),
+            ("idx_turns_dashboard", "turns", "date, model, agent_type, agent_role, reasoning_effort, project"),
+            ("idx_activities_date", "activities", "date"),
+            ("idx_activities_session", "activities", "session_id"),
+            ("idx_activities_dashboard", "activities", "date, activity_type, model, agent_type, agent_role, reasoning_effort, project, skill_name"),
+            ("idx_limits_date", "rate_limits", "date"),
+        ]
+        for name, table, cols in indexes:
+            if table not in names:
+                continue
+            conn.execute(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})')
+        conn.execute("ANALYZE")
+        conn.commit()
+        clear_cache()
+        print("SQLite schema/index maintenance completed.", flush=True)
+    except Exception as exc:
+        print(f"Warning: SQLite startup maintenance failed: {exc}", file=sys.stderr, flush=True)
     finally:
         conn.close()
 
 
-def ensure_database(data_dir: Path, codex_home: Path) -> None:
+def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
+    """Keep startup non-blocking; maintain/migrate data after HTTP is already serving."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    if database_has_current_schema(data_dir):
+    if db_path(data_dir).exists():
+        migrate_existing_database(data_dir, codex_home)
         return
     if not (data_dir / "codex_usage_records.csv").exists() or not codex_home.exists():
         return
-    subprocess.run(
+    proc = subprocess.run(
         [
             sys.executable, str(ROOT / "collect_codex_usage.py"),
             "--days", "1", "--codex-home", str(codex_home), "--output-dir", str(data_dir),
         ],
         cwd=ROOT, text=True, capture_output=True,
     )
+    if proc.returncode != 0:
+        print("Warning: initial SQLite build failed:\n" + (proc.stderr or proc.stdout or ""), file=sys.stderr, flush=True)
+    else:
+        clear_cache()
+        print("Initial SQLite database build completed.", flush=True)
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -1067,11 +1119,17 @@ def main() -> int:
     args = parse_args()
     data_dir = args.data_dir.expanduser().resolve()
     codex_home = args.codex_home.expanduser().resolve()
-    ensure_database(data_dir, codex_home)
+    data_dir.mkdir(parents=True, exist_ok=True)
     server = DashboardServer((args.host, args.port), DashboardHandler, data_dir, codex_home)
-    print(f"Codex usage dashboard: http://127.0.0.1:{args.port}/")
-    print(f"Codex source (read-only mount recommended): {codex_home}")
-    print(f"Analytics database: {db_path(data_dir)}")
+    print(f"Codex usage dashboard: http://127.0.0.1:{args.port}/", flush=True)
+    print(f"Codex source (read-only mount recommended): {codex_home}", flush=True)
+    print(f"Analytics database: {db_path(data_dir)}", flush=True)
+    threading.Thread(
+        target=prepare_database_background,
+        args=(data_dir, codex_home),
+        daemon=True,
+        name="startup-database-maintenance",
+    ).start()
     try:
         server.serve_forever(poll_interval=.5)
     except KeyboardInterrupt:
