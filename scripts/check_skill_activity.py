@@ -66,6 +66,15 @@ def main() -> int:
                 "turn_id": "turn-3",
                 "arguments": json.dumps({"package": "codebase-memory"}),
             }),
+            item("2026-09-23T00:00:04Z", "event_msg", {
+                "type": "item_completed", "turn_id": "turn-3",
+                "item": {
+                    "type": "McpToolCall", "id": "mcp-1",
+                    "server": "Codebase Memory", "tool": "search_graph",
+                    "arguments": {"query": "architecture"}, "status": "completed",
+                    "duration": {"secs": 1, "nanos": 250000000},
+                },
+            }),
         ]
         rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
@@ -89,8 +98,13 @@ def main() -> int:
         assert {row["call_id"] for row in skills} == {
             "read-skill", "run-skill-script", "skills-read"
         }, skills
+        plugins = [row for row in activities if row.get("activity_type") == "plugin"]
+        assert len(plugins) == 1, plugins
+        assert plugins[0]["plugin_name"] == "Codebase Memory", plugins[0]
+        assert plugins[0]["tool_name"] == "search_graph", plugins[0]
+        assert plugins[0]["duration_ms"] == 1250, plugins[0]
 
-    print("Codex implicit skill invocation regression test passed.")
+    print("Codex implicit skill and typed MCP regression test passed.")
     return 0
 
 
