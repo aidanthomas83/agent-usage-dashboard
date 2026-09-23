@@ -18,6 +18,13 @@ const fmtUsd = value => n(value).toLocaleString('en-US',{style:'currency',curren
 const fmtRate = value => value==null?'—':'$'+n(value).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:4});
 const pct = value => `${n(value).toFixed(1)}%`;
 const fmtMs = value => {const v=n(value);if(!v)return'—';if(v>=60000)return`${(v/60000).toFixed(1)}m`;if(v>=1000)return`${(v/1000).toFixed(1)}s`;return`${Math.round(v)}ms`;};
+const fmtDuration = value => {
+  const total=Math.max(0,Math.round(n(value)/1000)),h=Math.floor(total/3600),m=Math.floor((total%3600)/60),sec=total%60;
+  if(h)return `${h}h ${String(m).padStart(2,'0')}m ${String(sec).padStart(2,'0')}s`;
+  if(m)return `${m}m ${String(sec).padStart(2,'0')}s`;
+  return `${sec}s`;
+};
+const fmtHoursAxis = value => n(value)>=10?`${n(value).toFixed(0)}h`:`${n(value).toFixed(1)}h`;
 const axisDate = value => {const [y,m,d]=String(value||'').split('-').map(Number),mons=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];return d&&m?`${String(d).padStart(2,'0')}-${mons[m-1]}`:String(value||'');};
 const fmtDate = (value,time=false) => {if(!value)return'—';const d=new Date(value);if(Number.isNaN(d.getTime()))return String(value).slice(0,time?16:10);return new Intl.DateTimeFormat('en-AU',time?{day:'2-digit',month:'short',year:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}:{day:'2-digit',month:'short',year:'2-digit'}).format(d);};
 const uniq = values => [...new Set(values.filter(v=>v!==''&&v!=null))];
@@ -210,16 +217,16 @@ function stackedDaily(data,valueKey='total_tokens',mode='tokens',options={}){
 
 function lineChart(data,nameKey,valueKey,colorFn,options={}){
   if(!data.length)return'<div class="empty">No data for this selection.</div>';
-  const height=options.height||280,maxSeries=options.maxSeries||6;
+  const height=options.height||280,maxSeries=options.maxSeries||6,axisFmt=options.axisFmt||fmt,valueFmt=options.valueFmt||fmtExact;
   const dates=uniq(data.map(x=>x.date)).sort(),names=uniq(data.map(x=>x[nameKey]||'Unknown'));
   const top=names.map(name=>[name,data.filter(x=>(x[nameKey]||'Unknown')===name).reduce((a,x)=>a+n(x[valueKey]),0)]).sort((a,b)=>b[1]-a[1]).slice(0,maxSeries).map(x=>x[0]);
   const shown=data.filter(x=>top.includes(x[nameKey]||'Unknown')),by=new Map();shown.forEach(x=>by.set(x.date+'|'+(x[nameKey]||'Unknown'),n(x[valueKey])));
   const max=Math.max(...shown.map(x=>n(x[valueKey])),1),W=1200,H=height,L=68,R=18,T=18,B=45,pw=W-L-R,ph=H-T-B;
   const x=(d,i)=>dates.length===1?L+pw/2:L+i*pw/(dates.length-1),y=v=>T+ph-v/max*ph;let svg=`<svg viewBox="0 0 ${W} ${H}">`;
-  for(let i=0;i<=4;i++){const v=max*i/4,yy=y(v);svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}"/><text class="axis-label" x="${L-8}" y="${yy+3}" text-anchor="end">${fmt(v)}</text>`;}
+  for(let i=0;i<=4;i++){const v=max*i/4,yy=y(v);svg+=`<line class="gridline" x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}"/><text class="axis-label" x="${L-8}" y="${yy+3}" text-anchor="end">${axisFmt(v)}</text>`;}
   top.forEach(name=>{const pts=dates.map((d,i)=>`${x(d,i)},${y(by.get(d+'|'+name)||0)}`).join(' ');svg+=`<polyline points="${pts}" fill="none" stroke="${colorFn(name)}" stroke-width="2.4" vector-effect="non-scaling-stroke"/>`;});
   const tickEvery=Math.max(1,Math.ceil(dates.length/12));
-  dates.forEach((d,i)=>{const left=dates.length===1?L:L+(i===0?0:(i-.5)*pw/(dates.length-1)),right=dates.length===1?W-R:L+(i===dates.length-1?dates.length-1:(i+.5))*pw/(dates.length-1),items=top.map(name=>({label:name,value:fmtExact(by.get(d+'|'+name)||0),color:colorFn(name)}));svg+=`<rect x="${left}" y="${T}" width="${Math.max(1,right-left)}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/>`;if(i===0||i===dates.length-1||i%tickEvery===0)svg+=`<text class="axis-label" x="${x(d,i)}" y="${H-13}" text-anchor="middle">${axisDate(d)}</text>`;});
+  dates.forEach((d,i)=>{const left=dates.length===1?L:L+(i===0?0:(i-.5)*pw/(dates.length-1)),right=dates.length===1?W-R:L+(i===dates.length-1?dates.length-1:(i+.5))*pw/(dates.length-1),items=top.map(name=>({label:name,value:valueFmt(by.get(d+'|'+name)||0),color:colorFn(name)}));svg+=`<rect x="${left}" y="${T}" width="${Math.max(1,right-left)}" height="${ph}" fill="transparent" data-tip-json="${tipJson(axisDate(d),items)}"/>`;if(i===0||i===dates.length-1||i%tickEvery===0)svg+=`<text class="axis-label" x="${x(d,i)}" y="${H-13}" text-anchor="middle">${axisDate(d)}</text>`;});
   svg+='</svg>';return svg+legend(top,colorFn);
 }
 
@@ -333,18 +340,57 @@ function renderInsights(data){
 
 function renderActivity(data){
   const skills=data.skill_totals||[],inv=n(data.skill_invocations),distinct=n(data.distinct_skills),collapsed=collapseSkillSeries(data.skill_activity||[],7);
+  const rs=data.runtime_summary||{},daily=data.runtime_daily||[],byAgent=(data.runtime_by_agent||[]).map(x=>({...x,hours:n(x.duration_ms)/3600000}));
+  const runtimeSeries=daily.flatMap(x=>[
+    {date:x.date,name:'Agent compute time',hours:n(x.agent_compute_ms)/3600000},
+    {date:x.date,name:'Active wall-clock time',hours:n(x.active_wall_ms)/3600000}
+  ]);
+  const hourlyCostSeries=daily.flatMap(x=>[
+    {date:x.date,name:'Cost / agent-hour',value:n(x.cost_per_agent_hour)},
+    {date:x.date,name:'Cost / active hour',value:n(x.cost_per_active_hour)}
+  ]);
+  const runtimeColor=name=>name==='Agent compute time'?'#0876db':name==='Active wall-clock time'?'#9aa4b2':agentColor(name);
+  const hourlyCostColor=name=>name==='Cost / agent-hour'?'#37ae69':'#7c5ce5';
   return`
-    <div class="tab-title"><div><h2>Activity over time</h2><p>Model/turn activity plus skill usage. Generic tool-call telemetry has been removed from the visual dashboard because it mixes shell, MCP, plugin and function invocations into one broad count.</p></div></div>
-    <div class="panel full-panel"><h3>Tokens by model</h3><div class="desc">Total token traffic by model over time.</div><div class="chart activity-chart-large">${lineChart(data.daily_models||[],'model','total_tokens',modelColor,{height:380,maxSeries:8})}</div></div>
+    <div class="tab-title"><div><h2>Activity over time</h2><p>Agent runtime, model/turn activity and skill usage for the selected period.</p></div></div>
+
+    <div class="kpis runtime-kpis">
+      ${kpi('Agent compute time',fmtDuration(rs.agent_compute_ms),'Sum of all agent turn durations','var(--blue)')}
+      ${kpi('Active wall-clock time',fmtDuration(rs.active_wall_ms),'Overlapping agent intervals counted once','#9aa4b2')}
+      ${kpi('Parallelism',n(rs.parallelism_factor).toFixed(2)+'×','Compute time ÷ active wall-clock time','var(--purple)')}
+      ${kpi('Cost / agent-hour',fmtUsd(rs.cost_per_agent_hour),'API-equivalent cost ÷ compute hours','var(--green)')}
+      ${kpi('Cost / active hour',fmtUsd(rs.cost_per_active_hour),'API-equivalent cost ÷ active wall-clock hours','var(--teal)')}
+      ${kpi('Runtime coverage',pct(rs.duration_coverage_pct),`${pct(rs.interval_coverage_pct)} with start/end timestamps`,'var(--orange)',n(rs.duration_coverage_pct)<95)}
+    </div>
+
+    <div class="panel full-panel">
+      <h3>Runtime by day</h3>
+      <div class="desc">Agent compute time adds concurrent agents together; active wall-clock time merges overlapping turn intervals. Hover for hours, minutes and seconds.</div>
+      <div class="chart activity-chart-large">${lineChart(runtimeSeries,'name','hours',runtimeColor,{height:380,maxSeries:4,axisFmt:fmtHoursAxis,valueFmt:v=>fmtDuration(n(v)*3600000)})}</div>
+    </div>
+
+    <div class="panel full-panel mt">
+      <h3>Agent compute time by role</h3>
+      <div class="desc">Daily cumulative turn duration for each recorded agent role. Concurrent roles can make the daily total exceed 24 hours.</div>
+      <div class="chart activity-chart-large">${lineChart(byAgent,'name','hours',agentColor,{height:380,maxSeries:10,axisFmt:fmtHoursAxis,valueFmt:v=>fmtDuration(n(v)*3600000)})}</div>
+    </div>
+
+    <div class="panel full-panel mt">
+      <h3>API-equivalent cost per runtime hour</h3>
+      <div class="desc">Two perspectives: cost per cumulative agent-hour and cost per wall-clock hour while at least one agent was active.</div>
+      <div class="chart activity-chart-large">${lineChart(hourlyCostSeries,'name','value',hourlyCostColor,{height:360,maxSeries:4,axisFmt:fmtUsd,valueFmt:fmtUsd})}</div>
+    </div>
+
+    <div class="panel full-panel mt"><h3>Tokens by model</h3><div class="desc">Total token traffic by model over time.</div><div class="chart activity-chart-large">${lineChart(data.daily_models||[],'model','total_tokens',modelColor,{height:380,maxSeries:8})}</div></div>
     <div class="panel full-panel mt"><h3>Turns by model</h3><div class="desc">Recorded task/turn volume by model over time.</div><div class="chart activity-chart-large">${lineChart(data.turns_by_model||[],'model','turns',modelColor,{height:380,maxSeries:8})}</div></div>
     <div class="panel activity-skills">
       <h3>Skill invocations over time</h3>
-      <div class="desc">All ${fmtExact(inv)} invocations across ${fmtExact(distinct)} distinct skills are represented. The seven most-used skills are shown individually and the remainder are combined into Other.</div>
+      <div class="desc">All ${fmtExact(inv)} invocations across ${fmtExact(distinct)} distinct skills are represented. Skill detection remains best-effort while current Codex skill-read events are being validated.</div>
       <div class="skill-summary">${mini('Skill invocations',fmtExact(inv),'Total invocations in selection')}${mini('Distinct skills',fmtExact(distinct),'Unique observed skill names')}</div>
       <div class="chart skill-chart">${collapsed.length?lineChart(collapsed,'name','value',skillColor,{height:360,maxSeries:20}):'<div class="empty">No attributable skill invocations were found in this selection.</div>'}</div>
       <div class="grid-2 equal mt">
         <div><h3>Most-used skills</h3><div class="desc">Invocation count; this reconciles to the chart total.</div>${hbars(skills.map(x=>({...x,total_tokens:x.value})),inv,skillColor,fmtExact,15)}</div>
-        <div><h3>Configured skills</h3><div class="desc">Skills found beneath the mounted .codex/skills directory, including skills not observed in the current data.</div>${statusPills(data.configured_skills||[],'No configured skills were found in .codex/skills.')}</div>
+        <div><h3>Configured skills</h3><div class="desc">Skills found beneath the mounted .codex/skills directory. Current skill-read telemetry is still being validated, so “not observed” should not yet be read as “not used”.</div>${statusPills(data.configured_skills||[],'No configured skills were found in .codex/skills.')}</div>
       </div>
     </div>
     <div class="data-note">${esc(data.code_metric_note||'')}</div>
