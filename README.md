@@ -83,11 +83,13 @@ Two refresh modes are supported:
 - **Last N days** — e.g. 7, 30, 60 or 90 days.
 - **Date range** — explicitly select the first and last dates to rebuild.
 
-Refreshes run in the background. The existing dashboard remains usable while the collector is working, and the page automatically reloads the SQLite-backed measurements after the refresh completes.
+Refreshes run in the background. The existing dashboard remains usable while the collector is working, and the page automatically reloads the SQLite-backed measurements after the refresh completes. The refresh banner reports live collector phases such as rollout discovery, parse progress, and the final SQLite update.
+
+Dashboard-triggered refreshes use an **incremental SQLite path**: only the selected date partitions are rebuilt and replaced. They do not reread retained CSV history, rewrite every export, rebuild the whole database, or recreate every index.
 
 There is also a **Full rollout scan** option. Use this for historical backfills or after changes to the rollout parser. Normal incremental refreshes do not usually need it.
 
-Refreshes remain idempotent: the selected local calendar dates are rebuilt rather than appended, so rerunning the same range does not duplicate usage.
+Refreshes remain idempotent: the selected local calendar dates are rebuilt rather than appended, so rerunning the same range does not duplicate usage. The standalone CLI still performs the full CSV/export workflow when you explicitly need updated export files.
 
 ## Docker mounts and privacy
 
