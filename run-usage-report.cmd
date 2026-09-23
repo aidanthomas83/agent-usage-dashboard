@@ -12,6 +12,8 @@ if "%~1"=="" (
   py "%~dp0collect_codex_usage.py" --days 7
 ) else if /I "%~1"=="--days" (
   py "%~dp0collect_codex_usage.py" %*
+) else if /I "%~1"=="--from-date" (
+  py "%~dp0collect_codex_usage.py" %*
 ) else if /I "%~1"=="--help" (
   py "%~dp0collect_codex_usage.py" %*
 ) else if /I "%~1"=="-h" (
@@ -28,7 +30,7 @@ if not "%RESULT%"=="0" (
 )
 
 if not "%CODEX_USAGE_NO_OPEN%"=="1" (
-  start "" "%~dp0dashboard\index.html"
+  start "" "http://127.0.0.1:8765/"
 )
 
 endlocal
