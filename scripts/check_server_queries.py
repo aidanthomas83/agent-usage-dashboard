@@ -81,6 +81,26 @@ def main() -> int:
             "skill_name": "coding-standards",
             "call_id": "skill-1",
         }
+        mcp = {
+            "date": "2026-09-23",
+            "timestamp_utc": "2026-09-23T00:00:01Z",
+            "session_id": "session-1",
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "project": "test-project",
+            "agent_type": "Subagent",
+            "agent_role": "executor",
+            "agent_label": "executor",
+            "model": "gpt-6-sol",
+            "reasoning_effort": "medium",
+            "activity_type": "plugin",
+            "tool_name": "search_graph",
+            "tool_category": "Codebase Memory",
+            "plugin_name": "Codebase Memory",
+            "call_id": "mcp-1",
+            "status": "completed",
+            "duration_ms": 1250,
+        }
         limit = {
             "date": "2026-09-23",
             "timestamp_utc": "2026-09-23T00:00:02Z",
@@ -95,7 +115,7 @@ def main() -> int:
             db,
             [record],
             [turn],
-            [skill],
+            [skill, mcp],
             [limit],
             [{"date": "2026-09-23"}],
             [{"name": "executor"}],
@@ -140,8 +160,14 @@ def main() -> int:
 
         assert token["ready"] and token["summary"]["responses"] == 1, token
         assert subscription["ready"] and subscription["summary"]["api_cost"] > 0, subscription
+        assert subscription["runtime_summary"]["agent_compute_ms"] == 5000, subscription["runtime_summary"]
+        assert subscription["runtime_agents"][0]["name"] == "executor", subscription["runtime_agents"]
+        assert subscription["runtime_agents"][0]["api_cost"] > 0, subscription["runtime_agents"]
         assert insights["skill_summary"]["skill_invocations"] == 1, insights
         assert activity["skill_invocations"] == 1 and activity["distinct_skills"] == 1, activity
+        assert activity["mcp_integrations"][0]["name"] == "Codebase Memory", activity["mcp_integrations"]
+        assert activity["mcp_integrations"][0]["calls"] == 1, activity["mcp_integrations"]
+        assert activity["mcp_tools"][0]["tool"] == "search_graph", activity["mcp_tools"]
         runtime = activity["runtime_summary"]
         assert runtime["agent_compute_ms"] == 5000, runtime
         assert runtime["active_wall_ms"] == 5000, runtime
