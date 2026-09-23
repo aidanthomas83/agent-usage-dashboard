@@ -8,7 +8,8 @@ Reads current Codex CLI/Desktop rollouts under ~/.codex and writes:
   data/codex_rate_limits.csv    - observed primary/secondary usage pressure
   data/codex_usage_daily.csv    - daily token/credit summary
   data/codex_agents.csv         - configured ~/.codex/agents inventory
-  data/codex_usage_data.js      - compact browser bundle for the local dashboard
+  data/codex_skills.csv         - configured ~/.codex/skills inventory
+  data/codex_usage.sqlite       - SQLite snapshot used by the local dashboard
 
 The last N *local calendar days* are rebuilt, not appended. Existing rows for
 those days are removed and regenerated from rollouts, so reruns are idempotent.
@@ -155,6 +156,7 @@ LIMIT_INT_FIELDS = {"primary_window_minutes", "primary_resets_at", "secondary_wi
 LIMIT_FLOAT_FIELDS = {"primary_used_pct", "secondary_used_pct"}
 
 AGENT_FIELDS = ["name", "description", "model", "reasoning_effort", "sandbox_mode", "config_file"]
+SKILL_FIELDS = ["name", "skill_file"]
 
 SKILL_URI_RE = re.compile(r"skills://([^\s\"'`)]+?)/(?:skill|SKILL)\.md", re.IGNORECASE)
 # Explicit Codex skill injection can be persisted as a structured <skill> fragment
@@ -373,6 +375,39 @@ def load_configured_agents(codex_home: Path, verbose: bool = False) -> list[dict
             "config_file": path.name,
         })
     return agents
+
+
+def load_configured_skills(codex_home: Path, verbose: bool = False) -> list[dict[str, str]]:
+    """Inventory local Codex skills without persisting their instructions/content."""
+    skills_root = codex_home / "skills"
+    if not skills_root.exists():
+        return []
+    found: dict[str, dict[str, str]] = {}
+    paths = sorted(set(skills_root.rglob("SKILL.md")) | set(skills_root.rglob("skill.md")))
+    for path in paths:
+        name = path.parent.name
+        try:
+            # Frontmatter name is authoritative where present. Read only enough
+            # to identify it; no skill instructions are stored in analytics.
+            for raw in path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]:
+                line = raw.strip()
+                if line.lower().startswith("name:"):
+                    candidate = line.split(":", 1)[1].strip().strip("'\"")
+                    if candidate:
+                        name = candidate
+                    break
+        except OSError as exc:
+            if verbose:
+                print(f"Warning: could not inspect skill {path}: {exc}", file=sys.stderr)
+        clean = clean_skill_name(name)
+        if not clean:
+            continue
+        try:
+            rel = path.relative_to(codex_home).as_posix()
+        except ValueError:
+            rel = path.name
+        found[clean.lower()] = {"name": clean, "skill_file": rel}
+    return sorted(found.values(), key=lambda row: row["name"].lower())
 
 
 def discover_rollouts(codex_home: Path, earliest_local: datetime, scan_all: bool) -> list[Path]:
@@ -1265,6 +1300,7 @@ def write_sqlite_snapshot(
     limits: list[dict[str, Any]],
     daily: list[dict[str, Any]],
     configured_agents: list[dict[str, str]],
+    configured_skills: list[dict[str, str]],
     metadata: dict[str, Any],
     daily_fields: list[str],
 ) -> None:
@@ -1317,6 +1353,7 @@ def write_sqlite_snapshot(
             "api_equivalent_cost_usd", "api_cost_coverage_pct",
         })
         create_and_insert(conn, "configured_agents", AGENT_FIELDS, configured_agents, set(), set())
+        create_and_insert(conn, "configured_skills", SKILL_FIELDS, configured_skills, set(), set())
         conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         conn.executemany(
             "INSERT INTO metadata(key,value) VALUES (?,?)",
@@ -1331,15 +1368,19 @@ def write_sqlite_snapshot(
             ("idx_responses_project", "responses", "project"),
             ("idx_responses_session", "responses", "session_id"),
             ("idx_responses_thread", "responses", "thread_id"),
+            ("idx_responses_dashboard", "responses", "date, model, agent_type, agent_role, reasoning_effort, project"),
             ("idx_turns_date", "turns", "date"),
             ("idx_turns_session", "turns", "session_id"),
             ("idx_turns_model", "turns", "model"),
+            ("idx_turns_dashboard", "turns", "date, model, agent_type, agent_role, reasoning_effort, project"),
             ("idx_activities_date", "activities", "date"),
             ("idx_activities_session", "activities", "session_id"),
+            ("idx_activities_dashboard", "activities", "date, activity_type, model, agent_type, agent_role, reasoning_effort, project, skill_name"),
             ("idx_limits_date", "rate_limits", "date"),
         ]
         for name, table, cols in indexes:
             conn.execute(f'CREATE INDEX "{name}" ON "{table}" ({cols})')
+        conn.execute("ANALYZE")
         conn.commit()
     finally:
         conn.close()
@@ -1360,10 +1401,10 @@ def main() -> int:
         print(f"Codex home not found: {codex_home}",file=sys.stderr); return 1
 
     records_path=output_dir/"codex_usage_records.csv"; turns_path=output_dir/"codex_turns.csv"; activity_path=output_dir/"codex_activity.csv"; limits_path=output_dir/"codex_rate_limits.csv"
-    daily_path=output_dir/"codex_usage_daily.csv"; database_path=output_dir/"codex_usage.sqlite"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"
+    daily_path=output_dir/"codex_usage_daily.csv"; database_path=output_dir/"codex_usage.sqlite"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"; skills_path=output_dir/"codex_skills.csv"
 
     selected={d.isoformat() for d in dates}; earliest=min(dates); earliest_local=datetime.combine(earliest,datetime.min.time(),tzinfo=local_tz)
-    names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
+    names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); skills=load_configured_skills(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
 
     existing_records=load_csv(records_path,RECORD_FIELDS,RECORD_INT_FIELDS,RECORD_FLOAT_FIELDS)
     existing_turns=load_csv(turns_path,TURN_FIELDS,TURN_INT_FIELDS,TURN_FLOAT_FIELDS)
@@ -1385,7 +1426,7 @@ def main() -> int:
     activities=dedupe_activity(retained_activity+rebuilt_activity)
     limits=dedupe_limits(retained_limits+rebuilt_limits)
 
-    write_csv_atomic(records_path,records,RECORD_FIELDS); write_csv_atomic(turns_path,turns,TURN_FIELDS); write_csv_atomic(activity_path,activities,ACTIVITY_FIELDS); write_csv_atomic(limits_path,limits,LIMIT_FIELDS); write_csv_atomic(agents_path,agents,AGENT_FIELDS)
+    write_csv_atomic(records_path,records,RECORD_FIELDS); write_csv_atomic(turns_path,turns,TURN_FIELDS); write_csv_atomic(activity_path,activities,ACTIVITY_FIELDS); write_csv_atomic(limits_path,limits,LIMIT_FIELDS); write_csv_atomic(agents_path,agents,AGENT_FIELDS); write_csv_atomic(skills_path,skills,SKILL_FIELDS)
     daily=daily_summary(records,turns,activities)
     daily_fields=["date","responses","turns","sessions","threads","models","input_tokens","cached_input_tokens","fresh_input_tokens","output_tokens","reasoning_output_tokens","total_tokens","cache_hit_pct","estimated_credits","credit_coverage_pct","api_equivalent_cost_usd","api_cost_coverage_pct","compaction_responses","failed_or_aborted_turns","turn_duration_ms","tool_calls","skill_uses","patch_lines_changed"]
     write_csv_atomic(daily_path,daily,daily_fields)
@@ -1395,7 +1436,7 @@ def main() -> int:
         "generated_at":now.isoformat(),"local_timezone":str(local_tz),"codex_home":str(codex_home),"processed_dates":sorted(selected),"days_requested":len(dates),
         "requested_from":min(selected),"requested_to":max(selected),
         "rollout_files_scanned":len(rollouts),"rollout_files_with_selected_activity":files_with_usage,"rebuilt_responses":len(dedupe_records(rebuilt_records)),"dataset_responses":len(records),"dataset_turns":len(turns),"dataset_activities":len(activities),
-        "dataset_first_date":min((r["date"] for r in records),default=None),"dataset_last_date":max((r["date"] for r in records),default=None),"configured_agents":len(agents),
+        "dataset_first_date":min((r["date"] for r in records),default=None),"dataset_last_date":max((r["date"] for r in records),default=None),"configured_agents":len(agents),"configured_skills":len(skills),
         "credit_rate_as_of":CREDIT_RATE_AS_OF,"credit_rate_source":CREDIT_RATE_SOURCE,"credit_coverage_pct":round((priced_tokens/all_tokens*100.0) if all_tokens else 0.0,4),
         "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
         "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
@@ -1403,7 +1444,7 @@ def main() -> int:
         "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
         "usage_source_counts":dict(sorted({src:sum(1 for r in records if str(r.get("usage_source") or "")==src) for src in {str(r.get("usage_source") or "") for r in records if r.get("usage_source")}}.items())),
     }
-    write_sqlite_snapshot(database_path,records,turns,activities,limits,daily,agents,metadata,daily_fields)
+    write_sqlite_snapshot(database_path,records,turns,activities,limits,daily,agents,skills,metadata,daily_fields)
     stale_browser_bundle=output_dir/"codex_usage_data.js"
     try:
         stale_browser_bundle.unlink()
