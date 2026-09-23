@@ -36,6 +36,7 @@ _REFRESH: dict[str, object] = {
     "finished_at": None,
     "request": None,
     "message": "",
+    "phase": "idle",
     "log": [],
     "return_code": None,
 }
@@ -895,13 +896,14 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
         _REFRESH.update({
             "id": job_id, "status": "running", "started_at": utc_now(),
             "finished_at": None, "request": request,
-            "message": "Refreshing Codex telemetry…", "log": [], "return_code": None,
+            "message": "Preparing refresh…", "phase": "starting", "log": [], "return_code": None,
         })
 
     def worker() -> None:
         cmd = [
-            sys.executable, str(ROOT / "collect_codex_usage.py"),
+            sys.executable, "-u", str(ROOT / "collect_codex_usage.py"),
             "--codex-home", str(codex_home), "--output-dir", str(data_dir),
+            "--sqlite-only",
         ]
         if request.get("mode") == "range":
             cmd += ["--from-date", str(request["from"]), "--to-date", str(request["to"])]
@@ -910,22 +912,51 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
         if request.get("scan_all"):
             cmd.append("--scan-all")
         try:
-            proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, timeout=None)
-            log_lines = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip().splitlines()[-40:]
+            proc = subprocess.Popen(
+                cmd,
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            log_lines: list[str] = []
+            if proc.stdout is not None:
+                for raw in proc.stdout:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    log_lines.append(line)
+                    log_lines = log_lines[-40:]
+                    with _REFRESH_LOCK:
+                        _REFRESH["log"] = list(log_lines)
+                        _REFRESH["message"] = line
+                        if line.startswith("Preparing"):
+                            _REFRESH["phase"] = "preparing"
+                        elif line.startswith("Scanning") or line.startswith("Parsed"):
+                            _REFRESH["phase"] = "scanning"
+                        elif line.startswith("Updating selected SQLite"):
+                            _REFRESH["phase"] = "updating"
+                        elif line.startswith("Refresh complete"):
+                            _REFRESH["phase"] = "finalising"
+            return_code = proc.wait()
             clear_cache()
             with _REFRESH_LOCK:
-                _REFRESH["return_code"] = proc.returncode
+                _REFRESH["return_code"] = return_code
                 _REFRESH["log"] = log_lines
                 _REFRESH["finished_at"] = utc_now()
-                if proc.returncode == 0:
+                if return_code == 0:
                     _REFRESH["status"] = "completed"
+                    _REFRESH["phase"] = "completed"
                     _REFRESH["message"] = "Refresh completed."
                 else:
                     _REFRESH["status"] = "failed"
-                    _REFRESH["message"] = f"Refresh failed with exit code {proc.returncode}."
+                    _REFRESH["phase"] = "failed"
+                    _REFRESH["message"] = f"Refresh failed with exit code {return_code}."
         except Exception as exc:
             with _REFRESH_LOCK:
                 _REFRESH["status"] = "failed"
+                _REFRESH["phase"] = "failed"
                 _REFRESH["finished_at"] = utc_now()
                 _REFRESH["message"] = str(exc)
                 _REFRESH["log"] = traceback.format_exc().splitlines()[-40:]
@@ -942,6 +973,7 @@ def migrate_existing_database(data_dir: Path, codex_home: Path) -> None:
     conn = sqlite3.connect(path, timeout=30)
     try:
         conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
         names = {str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         required = {"responses", "turns", "activities", "configured_agents", "metadata"}
         if not required <= names:
