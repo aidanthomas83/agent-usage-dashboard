@@ -2,8 +2,13 @@
 """Integration checks for tab-specific SQLite dashboard queries."""
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import collect_codex_usage as collector
 import server
