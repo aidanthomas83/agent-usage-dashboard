@@ -8,7 +8,7 @@ The application is designed to answer questions such as:
 - How much input is fresh vs cached?
 - How much would the selected token usage cost through the OpenAI API at the embedded current rate card?
 - Which sessions, agents and reasoning levels are most expensive?
-- How much compaction, tool and skill activity is occurring?
+- How much compaction and skill activity is occurring?
 - What value am I getting from my Codex / ChatGPT subscription?
 
 ## Architecture
@@ -29,7 +29,7 @@ local Python API
 http://127.0.0.1:8765
 ```
 
-The browser no longer loads a generated `codex_usage_data.js` file. Dashboard queries are executed against SQLite and returned asynchronously as small aggregated JSON responses.
+The browser no longer loads a generated `codex_usage_data.js` file. Dashboard queries are executed against SQLite and returned asynchronously as small aggregated JSON responses. Each dashboard tab has its own query path, and identical tab/filter queries are cached in memory until the database or pricing data changes.
 
 The detailed CSV files are still produced as local exports/debugging data, but they are not used by the dashboard runtime.
 
@@ -131,7 +131,9 @@ data/
   codex_rate_limits.csv
   codex_usage_daily.csv
   codex_agents.csv
+  codex_skills.csv
   codex_usage_metadata.json
+  api_pricing.json
 ```
 
 SQLite is the dashboard source of truth. CSVs are retained for inspection/export.
@@ -149,6 +151,16 @@ The dashboard supports:
 
 Filters are sent to the local API and applied in SQLite. The browser does not need to download all raw response records to change a filter.
 
+The main views are separated into tabs so changing a filter only runs the SQL needed for the active view:
+
+- Token usage
+- Subscription value
+- Useful insights
+- Activity over time
+- Highest-usage sessions
+
+The sessions endpoint is deliberately limited to the top 100 sessions by total token usage for the selected filters; the returned set remains sortable in the browser.
+
 ## API-equivalent token cost
 
 The dashboard calculates a **counterfactual Standard OpenAI API token cost in USD** for the selected usage.
@@ -162,11 +174,17 @@ cache-write input
 output
 ```
 
-and the embedded current API rate card, including documented long-context multipliers where applicable.
+and the locally stored current API rate card, including documented long-context rates where applicable.
+
+The **Subscription value** tab shows the exact per-million-token prices being used. **Check latest prices** fetches the public OpenAI API pricing page, updates the local `data/api_pricing.json` rate card, clears the server query cache, and reprices the existing historical telemetry without recollecting Codex sessions. If that request fails, the previously stored local rates remain in use.
 
 This is intended as a subscription-value comparison rather than an invoice. It does not include separately priced API services such as web search, containers, storage, regional processing or other non-token charges.
 
 The dashboard also keeps the separate Codex/Business credit-equivalent estimate.
+
+The dashboard intentionally does **not** surface the old generic "tool calls" count. The rollout parser classifies shell/function/custom/MCP calls as activity, but combining these into one headline number mixes unlike operations and was not analytically useful. Skill invocation detection is retained, and configured skills beneath `~/.codex/skills` are inventoried so unused skills can be shown alongside used ones.
+
+Codex rollouts also do not expose a reliable "lines of code generated" metric. Explicit patch diffs can sometimes be counted, but shell/file-write paths are not consistently attributable. The dashboard therefore omits the old patch-lines chart rather than presenting an incomplete number. A trustworthy LOC metric would need repository/Git diff correlation.
 
 ## Historical Codex telemetry
 
@@ -201,6 +219,7 @@ GitHub Actions verifies:
 - collector CLI startup
 - collector smoke run
 - legacy `token_count` telemetry regression
+- tab-specific SQLite query integration
 - local API server startup and health endpoint
 - dashboard JavaScript syntax
 - Docker image build
