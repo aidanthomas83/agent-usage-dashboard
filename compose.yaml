@@ -9,6 +9,7 @@ services:
       CODEX_HOME: /codex
       DATA_DIR: /app/data
       DASHBOARD_PORT: "8765"
+      TZ: ${TZ:-Australia/Brisbane}
     volumes:
       - type: bind
         source: ${USERPROFILE}/.codex
