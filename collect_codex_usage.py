@@ -1455,7 +1455,7 @@ def main() -> int:
         print(f"Codex home not found: {codex_home}",file=sys.stderr); return 1
 
     records_path=output_dir/"codex_usage_records.csv"; turns_path=output_dir/"codex_turns.csv"; activity_path=output_dir/"codex_activity.csv"; limits_path=output_dir/"codex_rate_limits.csv"
-    daily_path=output_dir/"codex_usage_daily.csv"; data_path=output_dir/"codex_usage_data.js"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"
+    daily_path=output_dir/"codex_usage_daily.csv"; database_path=output_dir/"codex_usage.sqlite"; metadata_path=output_dir/"codex_usage_metadata.json"; agents_path=output_dir/"codex_agents.csv"
 
     selected={d.isoformat() for d in dates}; earliest=min(dates); earliest_local=datetime.combine(earliest,datetime.min.time(),tzinfo=local_tz)
     names=load_thread_names(codex_home,args.verbose); agents=load_configured_agents(codex_home,args.verbose); rollouts=discover_rollouts(codex_home,earliest_local,args.scan_all)
@@ -1498,7 +1498,12 @@ def main() -> int:
         "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
         "usage_source_counts":dict(sorted({src:sum(1 for r in records if str(r.get("usage_source") or "")==src) for src in {str(r.get("usage_source") or "") for r in records if r.get("usage_source")}}.items())),
     }
-    write_dashboard_data(data_path,records,turns,activities,limits,metadata,agents)
+    write_sqlite_snapshot(database_path,records,turns,activities,limits,daily,agents,metadata,daily_fields)
+    stale_browser_bundle=output_dir/"codex_usage_data.js"
+    try:
+        stale_browser_bundle.unlink()
+    except FileNotFoundError:
+        pass
     with metadata_path.open("w",encoding="utf-8") as f: json.dump(metadata,f,indent=2); f.write("\n")
 
     ds=sorted(selected)
@@ -1516,13 +1521,11 @@ def main() -> int:
     print(f"Dataset: {len(records):,} responses | {len(turns):,} turns | {len(activities):,} activities")
     print(f"Credit estimate coverage: {metadata['credit_coverage_pct']:.1f}% of token volume")
     try:
-        browser_mb = data_path.stat().st_size / (1024 * 1024)
-        print(f"Browser bundle: {browser_mb:.1f} MB (packed format v2)")
-        if browser_mb > 80:
-            print("Warning: browser bundle is still very large; consider a shorter dashboard history if the browser is memory constrained.", file=sys.stderr)
+        database_mb = database_path.stat().st_size / (1024 * 1024)
+        print(f"SQLite database: {database_mb:.1f} MB")
     except OSError:
         pass
-    print(f"Dashboard: {Path(__file__).resolve().parent/'dashboard'/'index.html'}")
+    print(f"SQLite: {database_path}")
     return 0
 
 if __name__=="__main__":
