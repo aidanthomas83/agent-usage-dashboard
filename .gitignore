@@ -1,0 +1,36 @@
+# Generated/local telemetry - never commit
+/data/
+/preview-data/
+/test-output/
+/.codex/
+
+# Codex/session stores
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Local environment / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Python/runtime artefacts
+__pycache__/
+*.py[cod]
+*.log
+
+# Local/editor/backups
+*.bak
+*.bak-*
+*.tmp
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
