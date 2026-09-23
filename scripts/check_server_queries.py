@@ -145,7 +145,58 @@ def main() -> int:
         assert statuses["unused-skill"] == "never_seen", statuses
         assert len(sessions["sessions"]) == 1 and sessions["sessions"][0]["api_cost"] > 0, sessions
 
-    print("Server tab query integration test passed.")
+        # Incremental dashboard refresh must replace only selected dates and
+        # leave historical partitions untouched.
+        old_record = dict(record)
+        old_record.update({
+            "date": "2026-09-22",
+            "timestamp_utc": "2026-09-22T00:00:01Z",
+            "timestamp_local": "2026-09-22T10:00:01+10:00",
+            "response_id": "response-old",
+            "total_tokens": 500,
+            "input_tokens": 450,
+            "fresh_input_tokens": 100,
+            "cached_input_tokens": 350,
+            "output_tokens": 50,
+        })
+        with sqlite3.connect(db) as conn:
+            fields = collector.RECORD_FIELDS
+            columns = ",".join(f'"{f}"' for f in fields)
+            placeholders = ",".join("?" for _ in fields)
+            conn.execute(
+                f'INSERT INTO responses ({columns}) VALUES ({placeholders})',
+                [old_record.get(f, 0 if f in collector.RECORD_INT_FIELDS or f in collector.RECORD_FLOAT_FIELDS else "") for f in fields],
+            )
+            conn.commit()
+
+        replacement_record = dict(record)
+        replacement_record.update({
+            "response_id": "response-replaced",
+            "total_tokens": 2200,
+            "input_tokens": 2000,
+            "fresh_input_tokens": 300,
+            "cached_input_tokens": 1700,
+            "output_tokens": 200,
+        })
+        collector.update_sqlite_range(
+            db,
+            {"2026-09-23"},
+            [replacement_record],
+            [turn],
+            [skill],
+            [limit],
+            [{"name": "executor"}],
+            [{"name": "coding-standards", "skill_file": "skills/coding-standards/SKILL.md"}],
+            {"generated_at": "2026-09-23T11:00:00+10:00"},
+            ["date"],
+        )
+        with sqlite3.connect(db) as conn:
+            sep22 = conn.execute("SELECT COUNT(*),SUM(total_tokens) FROM responses WHERE date='2026-09-22'").fetchone()
+            sep23 = conn.execute("SELECT COUNT(*),SUM(total_tokens) FROM responses WHERE date='2026-09-23'").fetchone()
+        assert sep22 == (1, 500), sep22
+        assert sep23 == (1, 2200), sep23
+
+    print("Server tab query and incremental refresh integration test passed.")
     return 0
 
 
