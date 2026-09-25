@@ -1800,34 +1800,61 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
         if request.get("scan_all"):
             cmd.append("--scan-all")
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-            )
             log_lines: list[str] = []
-            if proc.stdout is not None:
-                for raw in proc.stdout:
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    log_lines.append(line)
-                    log_lines = log_lines[-40:]
-                    with _REFRESH_LOCK:
-                        _REFRESH["log"] = list(log_lines)
-                        _REFRESH["message"] = line
-                        if line.startswith("Preparing"):
-                            _REFRESH["phase"] = "preparing"
-                        elif line.startswith("Scanning") or line.startswith("Parsed"):
-                            _REFRESH["phase"] = "scanning"
-                        elif line.startswith("Updating selected SQLite"):
-                            _REFRESH["phase"] = "updating"
-                        elif line.startswith("Refresh complete"):
-                            _REFRESH["phase"] = "finalising"
-            return_code = proc.wait()
+
+            def run_collector(command: list[str], phase: str, prefix: str = "") -> int:
+                nonlocal log_lines
+                with _REFRESH_LOCK:
+                    _REFRESH["phase"] = phase
+                proc = subprocess.Popen(
+                    command,
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=1,
+                )
+                if proc.stdout is not None:
+                    for raw in proc.stdout:
+                        raw_line = raw.strip()
+                        if not raw_line:
+                            continue
+                        line = f"{prefix}{raw_line}" if prefix else raw_line
+                        log_lines.append(line)
+                        log_lines = log_lines[-60:]
+                        with _REFRESH_LOCK:
+                            _REFRESH["log"] = list(log_lines)
+                            _REFRESH["message"] = line
+                            if raw_line.startswith("Preparing"):
+                                _REFRESH["phase"] = "preparing"
+                            elif raw_line.startswith("Scanning") or raw_line.startswith("Parsed"):
+                                _REFRESH["phase"] = "scanning"
+                            elif raw_line.startswith("Updating selected SQLite"):
+                                _REFRESH["phase"] = "updating"
+                return proc.wait()
+
+            return_code = run_collector(cmd, "codex")
+            if return_code == 0:
+                paperclip_cmd = [
+                    sys.executable, "-u", str(ROOT / "collect_paperclip_usage.py"),
+                    "--output-dir", str(data_dir),
+                ]
+                if request.get("mode") == "range":
+                    paperclip_cmd += [
+                        "--from-date", str(request["from"]),
+                        "--to-date", str(request["to"]),
+                    ]
+                else:
+                    paperclip_cmd += ["--days", str(int(request.get("days") or 7))]
+                paperclip_code = run_collector(
+                    paperclip_cmd, "paperclip", "Paperclip · "
+                )
+                # The Paperclip collector deliberately exits 0 for source
+                # unavailability so Codex remains usable. A nonzero return code
+                # is reserved for an implementation/configuration error.
+                if paperclip_code != 0:
+                    return_code = paperclip_code
+
             clear_cache()
             with _REFRESH_LOCK:
                 _REFRESH["return_code"] = return_code
@@ -1836,7 +1863,7 @@ def start_refresh(data_dir: Path, codex_home: Path, request: dict[str, object]) 
                 if return_code == 0:
                     _REFRESH["status"] = "completed"
                     _REFRESH["phase"] = "completed"
-                    _REFRESH["message"] = "Refresh completed."
+                    _REFRESH["message"] = "AI usage refresh completed."
                 else:
                     _REFRESH["status"] = "failed"
                     _REFRESH["phase"] = "failed"
