@@ -312,7 +312,7 @@ def normalize_run(
         account_display_name = (
             str(connection.get("name") or "").strip()
             or str(connection.get("accountLabel") or "").strip()
-            or f"{provider.title()} account"
+            or "Unknown account"
         )
     else:
         account_connection_id = ""
