@@ -16,6 +16,7 @@ import urllib.request
 import uuid
 
 import collect_codex_usage as collector
+import usage_model
 from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -155,10 +156,15 @@ def parse_filters(query: dict[str, list[str]]) -> dict[str, str]:
     result = {
         "from": one("from"),
         "to": one("to"),
+        "source": one("source"),
+        "billing": one("billing"),
+        "provider": one("provider"),
+        "account": one("account"),
         "model": one("model"),
         "agent": one("agent"),
         "effort": one("effort"),
         "project": one("project"),
+        "target_model": one("target_model"),
     }
     for key in ("from", "to"):
         if result[key]:
@@ -167,9 +173,23 @@ def parse_filters(query: dict[str, list[str]]) -> dict[str, str]:
 
 
 def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[object]]:
+    """Filters for the retained Codex-specific tables.
+
+    Cross-provider filters deliberately collapse this query to no rows when the
+    selection cannot represent Codex Desktop. This prevents a Paperclip/Ollama
+    filter from silently showing unrelated Codex-only diagnostics.
+    """
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
     values: list[object] = []
+    if filters.get("source") and filters["source"] != usage_model.SOURCE_CODEX:
+        clauses.append("1=0")
+    if filters.get("billing") and filters["billing"] != "subscription":
+        clauses.append("1=0")
+    if filters.get("provider") and filters["provider"] != "openai":
+        clauses.append("1=0")
+    if filters.get("account") and filters["account"] != "codex-desktop":
+        clauses.append("1=0")
     if filters.get("from"):
         clauses.append(f"{p}date>=?")
         values.append(filters["from"])
@@ -180,8 +200,17 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
         clauses.append(f"{p}model=?")
         values.append(filters["model"])
     if filters.get("agent"):
-        clauses.append(f"{agent_expr(alias)}=?")
-        values.append(filters["agent"])
+        agent = filters["agent"]
+        if agent == "codex:main":
+            role = "Main"
+        elif agent.startswith("codex:role:"):
+            role = agent.split(":", 2)[2]
+        else:
+            clauses.append("1=0")
+            role = ""
+        if role:
+            clauses.append(f"{agent_expr(alias)}=?")
+            values.append(role)
     if filters.get("effort"):
         clauses.append(f"{p}reasoning_effort=?")
         values.append(filters["effort"])
@@ -191,8 +220,217 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
+def normalized_where(
+    filters: dict[str, str],
+    alias: str = "",
+    *,
+    include_target: bool = False,
+) -> tuple[str, list[object]]:
+    """Composable filters for usage_records/usage_runs.
+
+    Default all-source queries use only primary rows so an exact Paperclip ↔
+    Codex session overlap is not double-counted. Selecting an explicit source
+    exposes that source's own raw normalized view, including overlap rows.
+    """
+    p = f"{alias}." if alias else ""
+    clauses: list[str] = []
+    values: list[object] = []
+    if not filters.get("source"):
+        clauses.append(f"{p}is_primary=1")
+    if filters.get("from"):
+        clauses.append(f"{p}date>=?")
+        values.append(filters["from"])
+    if filters.get("to"):
+        clauses.append(f"{p}date<=?")
+        values.append(filters["to"])
+    mapping = {
+        "source": "source_system",
+        "billing": "billing_mode",
+        "provider": "provider",
+        "account": "account_connection_id",
+        "model": "model",
+        "agent": "agent_id",
+        "effort": "reasoning_effort",
+        "project": "project_name",
+    }
+    for key, column in mapping.items():
+        if filters.get(key):
+            clauses.append(f"{p}{column}=?")
+            values.append(filters[key])
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
+
+
 def rows_as_dicts(rows) -> list[dict[str, object]]:
     return [dict(row) for row in rows]
+
+
+def source_label(value: str) -> str:
+    return {
+        usage_model.SOURCE_CODEX: "Codex Desktop",
+        usage_model.SOURCE_PAPERCLIP: "Paperclip",
+    }.get(str(value or ""), str(value or "Unknown").replace("_", " ").title())
+
+
+def normalized_group_rows(
+    conn: sqlite3.Connection,
+    filters: dict[str, str],
+    key_expr: str,
+    name_expr: str | None = None,
+) -> list[dict[str, object]]:
+    record_where, record_values = normalized_where(filters, "r")
+    run_where, run_values = normalized_where(filters, "u")
+    name_sql = name_expr or key_expr
+    tokens = rows_as_dicts(conn.execute(
+        f"""SELECT {key_expr.replace('{a}', 'r')} id,
+                   {name_sql.replace('{a}', 'r')} name,
+                   COALESCE(SUM(r.total_tokens),0) total_tokens,
+                   COALESCE(SUM(r.fresh_input_tokens),0) fresh_input_tokens,
+                   COALESCE(SUM(r.cached_input_tokens),0) cached_input_tokens,
+                   COALESCE(SUM(r.output_tokens),0) output_tokens
+              FROM usage_records r{record_where}
+             GROUP BY id,name""",
+        record_values,
+    ).fetchall())
+    runs = rows_as_dicts(conn.execute(
+        f"""SELECT {key_expr.replace('{a}', 'u')} id,
+                   {name_sql.replace('{a}', 'u')} name,
+                   COUNT(*) runs,
+                   SUM(CASE WHEN u.token_metrics_available=1 THEN 1 ELSE 0 END) token_runs,
+                   COALESCE(SUM(u.duration_ms),0) duration_ms
+              FROM usage_runs u{run_where}
+             GROUP BY id,name""",
+        run_values,
+    ).fetchall())
+    merged: dict[tuple[str, str], dict[str, object]] = {}
+    for row in tokens + runs:
+        key = (str(row.get("id") or ""), str(row.get("name") or "Unknown"))
+        bucket = merged.setdefault(key, {
+            "id": key[0], "name": key[1], "total_tokens": 0,
+            "fresh_input_tokens": 0, "cached_input_tokens": 0,
+            "output_tokens": 0, "runs": 0, "token_runs": 0, "duration_ms": 0,
+        })
+        for field in (
+            "total_tokens", "fresh_input_tokens", "cached_input_tokens",
+            "output_tokens", "runs", "token_runs", "duration_ms",
+        ):
+            bucket[field] = int(bucket.get(field) or 0) + int(row.get(field) or 0)
+    return sorted(
+        merged.values(),
+        key=lambda row: (int(row.get("total_tokens") or 0), int(row.get("runs") or 0)),
+        reverse=True,
+    )
+
+
+def normalized_pricing_groups(
+    conn: sqlite3.Connection,
+    filters: dict[str, str],
+    dimensions: list[tuple[str, str]],
+    pricing: dict[str, object],
+) -> list[dict[str, object]]:
+    where, values = normalized_where(filters, "r")
+    where += (" AND " if where else " WHERE ") + "r.token_metrics_available=1"
+    threshold = int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)
+    dim_select = ", ".join(f"{expr} AS {name}" for name, expr in dimensions)
+    dim_group = ", ".join(name for name, _expr in dimensions)
+    prefix = (dim_select + ", ") if dim_select else ""
+    group = (dim_group + ", ") if dim_group else ""
+    rows = conn.execute(
+        f"""SELECT {prefix}
+                   COALESCE(NULLIF(r.model,''),'Unknown') model,
+                   CASE WHEN
+                     (r.input_tokens+r.cached_input_tokens+r.cache_write_input_tokens)>{threshold}
+                   THEN 1 ELSE 0 END long_context,
+                   SUM(r.input_tokens) input_tokens,
+                   SUM(r.cached_input_tokens) cached_input_tokens,
+                   SUM(r.cache_write_input_tokens) cache_write_input_tokens,
+                   SUM(r.output_tokens) output_tokens,
+                   SUM(r.total_tokens) total_tokens
+              FROM usage_records r{where}
+             GROUP BY {group}model,long_context""",
+        values,
+    ).fetchall()
+    return price_group_rows(rows, [name for name, _expr in dimensions], pricing)
+
+
+def merged_normalized_interval_ms(rows) -> int:
+    converted = [
+        {"started_utc": row.get("started_utc"), "completed_utc": row.get("finished_utc")}
+        for row in rows
+    ]
+    return merged_interval_ms(converted)
+
+
+def normalized_runtime_breakdown(
+    conn: sqlite3.Connection,
+    filters: dict[str, str],
+    pricing: dict[str, object],
+) -> dict[str, object]:
+    where, values = normalized_where(filters, "u")
+    rows = rows_as_dicts(conn.execute(
+        f"""SELECT u.* FROM usage_runs u{where} ORDER BY u.date,u.started_utc""",
+        values,
+    ).fetchall())
+    compute_ms = sum(int(row.get("duration_ms") or 0) for row in rows)
+    active_ms = merged_normalized_interval_ms(rows)
+
+    costs = normalized_pricing_groups(conn, filters, [], pricing)
+    estimated = sum(float(row.get("api_cost") or 0) for row in costs)
+    actual_where, actual_values = normalized_where(filters, "u")
+    actual = conn.execute(
+        f"""SELECT COALESCE(SUM(actual_provider_cost_usd),0),
+                   SUM(CASE WHEN actual_cost_available=1 THEN 1 ELSE 0 END),
+                   COUNT(*)
+              FROM usage_runs u{actual_where}""",
+        actual_values,
+    ).fetchone()
+
+    by_agent: dict[str, dict[str, object]] = {}
+    for row in rows:
+        agent_id = str(row.get("agent_id") or "")
+        bucket = by_agent.setdefault(agent_id, {
+            "id": agent_id,
+            "name": str(row.get("agent_name") or "Unknown agent"),
+            "agent_compute_ms": 0,
+            "turns": 0,
+            "_intervals": [],
+        })
+        bucket["agent_compute_ms"] = int(bucket["agent_compute_ms"]) + int(row.get("duration_ms") or 0)
+        bucket["turns"] = int(bucket["turns"]) + 1
+        bucket["_intervals"].append(row)
+
+    cost_by_agent = {
+        str(row.get("id") or ""): float(row.get("api_cost") or 0)
+        for row in normalized_pricing_groups(
+            conn, filters, [("id", "r.agent_id")], pricing
+        )
+    }
+    agents: list[dict[str, object]] = []
+    for agent_id, bucket in by_agent.items():
+        active = merged_normalized_interval_ms(bucket.pop("_intervals"))
+        compute = int(bucket["agent_compute_ms"])
+        cost = cost_by_agent.get(agent_id, 0.0)
+        bucket["active_wall_ms"] = active
+        bucket["parallelism_factor"] = (compute / active) if active else 0.0
+        bucket["estimated_api_cost"] = cost
+        bucket["cost_per_agent_hour"] = cost / (compute / 3_600_000.0) if compute else 0.0
+        bucket["cost_per_active_hour"] = cost / (active / 3_600_000.0) if active else 0.0
+        agents.append(bucket)
+    agents.sort(key=lambda row: int(row.get("agent_compute_ms") or 0), reverse=True)
+
+    return {
+        "summary": {
+            "agent_compute_ms": compute_ms,
+            "active_wall_ms": active_ms,
+            "parallelism_factor": (compute_ms / active_ms) if active_ms else 0.0,
+            "estimated_api_cost": estimated,
+            "actual_provider_cost": float(actual[0] or 0),
+            "actual_cost_runs": int(actual[1] or 0),
+            "runs": int(actual[2] or 0),
+            "cost_per_agent_hour": estimated / (compute_ms / 3_600_000.0) if compute_ms else 0.0,
+            "cost_per_active_hour": estimated / (active_ms / 3_600_000.0) if active_ms else 0.0,
+        },
+        "agents": agents,
+    }
 
 
 def parse_iso_timestamp(value: object) -> datetime | None:
