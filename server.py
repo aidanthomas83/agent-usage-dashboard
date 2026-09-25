@@ -1508,103 +1508,201 @@ def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
 
 
 def sessions_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
+    pricing = load_pricing(data_dir)
+
     def build():
         conn = open_db(data_dir)
         if conn is None:
             return {"ready": False, "tab": "sessions"}
-        pricing = load_pricing(data_dir)
         try:
-            where, values = where_for(filters)
-            session_rows = rows_as_dicts(conn.execute(
-                f"""SELECT session_id,
-                           MAX(CASE WHEN session_name<>'' THEN session_name ELSE NULL END) name,
-                           MIN(NULLIF(thread_start_local,'')) start,
-                           MAX(NULLIF(thread_latest_local,'')) latest,
-                           COUNT(*) responses,
-                           COUNT(DISTINCT CASE WHEN agent_type='Subagent' THEN thread_id END) agents,
-                           SUM(CASE WHEN is_compaction='true' THEN 1 ELSE 0 END) compactions,
-                           SUM(fresh_input_tokens) fresh,
-                           SUM(cached_input_tokens) cached,
-                           SUM(output_tokens) output,
-                           SUM(total_tokens) total,
-                           SUM(estimated_credits) credits,
-                           SUM(CASE WHEN credit_rate_status LIKE 'priced%' THEN total_tokens ELSE 0 END) credit_priced
-                      FROM responses{where}
-                     {'AND' if where else 'WHERE'} session_id<>''
-                     GROUP BY session_id
-                     ORDER BY total DESC
-                     LIMIT 100""",
+            where, values = normalized_where(filters, "u")
+            rows = rows_as_dicts(conn.execute(
+                f"""SELECT u.*
+                      FROM usage_runs u{where}
+                     ORDER BY u.total_tokens DESC,u.duration_ms DESC,u.started_utc DESC
+                     LIMIT 200""",
                 values,
             ).fetchall())
-            ids = [str(r["session_id"]) for r in session_rows]
-            if not ids:
-                return {"ready": True, "tab": "sessions", "filters": filters, "metadata": decode_metadata(conn), "sessions": []}
-            placeholders = ",".join("?" for _ in ids)
-            limited_where = f"{where} {'AND' if where else 'WHERE'} session_id IN ({placeholders})"
-            limited_values = [*values, *ids]
-
-            top_models = {}
-            for row in conn.execute(
-                f"""SELECT session_id,model,SUM(total_tokens) total
-                      FROM responses{limited_where}
-                     GROUP BY session_id,model ORDER BY session_id,total DESC""",
-                limited_values,
-            ).fetchall():
-                sid = str(row["session_id"])
-                if sid not in top_models:
-                    top_models[sid] = str(row["model"] or "Unknown")
-
-            turn_where, turn_values = where_for(filters)
-            turn_limited = f"{turn_where} {'AND' if turn_where else 'WHERE'} session_id IN ({placeholders})"
-            turn_map = {
-                str(row["session_id"]): dict(row)
-                for row in conn.execute(
-                    f"""SELECT session_id,COUNT(*) turns,COALESCE(SUM(duration_ms),0) duration,
-                               SUM(CASE WHEN status IN ('failed','aborted') THEN 1 ELSE 0 END) failures,
-                               COALESCE(MAX(context_utilization_pct),0) max_context
-                          FROM turns{turn_limited}
-                         GROUP BY session_id""",
-                    [*turn_values, *ids],
-                ).fetchall()
-            }
-
-            cost_rows = price_group_rows(
-                pricing_groups(
-                    conn, filters, [("session_id", "session_id")], pricing,
-                    f"session_id IN ({placeholders})", ids,
-                ),
-                ["session_id"], pricing,
-            )
-            cost_map = {str(r["session_id"]): r for r in cost_rows if str(r["session_id"]) in set(ids)}
-
-            sessions = []
-            for row in session_rows:
-                sid = str(row["session_id"])
-                tr = turn_map.get(sid, {})
-                cr = cost_map.get(sid, {})
-                total = float(row.get("total") or 0)
-                sessions.append({
-                    **row,
-                    "name": row.get("name") or sid,
-                    "top_model": top_models.get(sid, "Unknown"),
-                    "turns": int(tr.get("turns") or 0),
-                    "duration": float(tr.get("duration") or 0),
-                    "failures": int(tr.get("failures") or 0),
-                    "max_context": float(tr.get("max_context") or 0),
-                    "credit_coverage": float(row.get("credit_priced") or 0) / total * 100.0 if total else 0.0,
-                    "api_cost": float(cr.get("api_cost") or 0),
-                    "api_coverage": float(cr.get("priced_tokens") or 0) / total * 100.0 if total else 0.0,
-                })
-
+            for row in rows:
+                if int(row.get("token_metrics_available") or 0):
+                    total_input = (
+                        int(row.get("input_tokens") or 0)
+                        + int(row.get("cached_input_tokens") or 0)
+                        + int(row.get("cache_write_input_tokens") or 0)
+                    )
+                    long_context = total_input > int(
+                        pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD
+                    )
+                    estimate, priced = api_cost(
+                        str(row.get("model") or ""),
+                        total_input,
+                        int(row.get("cached_input_tokens") or 0),
+                        int(row.get("cache_write_input_tokens") or 0),
+                        int(row.get("output_tokens") or 0),
+                        long_context,
+                        pricing,
+                    )
+                    row["current_api_estimate"] = estimate if priced else None
+                    row["current_api_priced"] = 1 if priced else 0
+                else:
+                    row["current_api_estimate"] = None
+                    row["current_api_priced"] = 0
             return {
-                "ready": True, "tab": "sessions", "filters": filters,
-                "metadata": decode_metadata(conn), "sessions": sessions,
-                "note": "Top 100 sessions by total token usage in the current filters; table sorting is applied to this result set.",
+                "ready": True,
+                "tab": "sessions",
+                "filters": filters,
+                "metadata": decode_metadata(conn),
+                "sessions": rows,
+                "note": (
+                    "Top 200 normalized runs by token workload, then duration. "
+                    "Runs without token counters remain visible with token usage marked unavailable."
+                ),
             }
         finally:
             conn.close()
 
-    return cached_payload(data_dir, "sessions", filters, (), build)
+    return cached_payload(data_dir, "sessions", filters, ("normalized-v1",), build)
+
+
+def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
+    pricing = load_pricing(data_dir)
+
+    def percentile_value(values: list[float], p: float) -> float:
+        cleaned = sorted(value for value in values if value >= 0)
+        if not cleaned:
+            return 0.0
+        index = round((len(cleaned) - 1) * p)
+        return float(cleaned[index])
+
+    def build():
+        conn = open_db(data_dir)
+        if conn is None:
+            return {"ready": False, "tab": "workload"}
+        try:
+            if not filters.get("agent"):
+                return {
+                    "ready": True,
+                    "tab": "workload",
+                    "filters": filters,
+                    "requires_agent": True,
+                    "metadata": decode_metadata(conn),
+                }
+
+            where, values = normalized_where(filters, "u")
+            rows = rows_as_dicts(conn.execute(
+                f"""SELECT u.* FROM usage_runs u{where}
+                     ORDER BY u.started_utc""",
+                values,
+            ).fetchall())
+            covered = [
+                row for row in rows
+                if int(row.get("token_metrics_available") or 0)
+            ]
+            run_tokens = [float(row.get("total_tokens") or 0) for row in covered]
+            durations = [float(row.get("duration_ms") or 0) for row in rows if int(row.get("duration_ms") or 0) > 0]
+
+            if filters.get("from") and filters.get("to"):
+                try:
+                    start_day = date.fromisoformat(filters["from"])
+                    end_day = date.fromisoformat(filters["to"])
+                    calendar_days = max(1, (end_day - start_day).days + 1)
+                except ValueError:
+                    calendar_days = len({str(row.get("date") or "") for row in rows}) or 1
+            else:
+                calendar_days = len({str(row.get("date") or "") for row in rows}) or 1
+
+            fresh = sum(int(row.get("fresh_input_tokens") or 0) for row in covered)
+            cached = sum(int(row.get("cached_input_tokens") or 0) for row in covered)
+            output = sum(int(row.get("output_tokens") or 0) for row in covered)
+            total = sum(int(row.get("total_tokens") or 0) for row in covered)
+            runtime_ms = sum(int(row.get("duration_ms") or 0) for row in rows)
+            current_cost_rows = normalized_pricing_groups(conn, filters, [], pricing)
+            current_api_cost = sum(float(row.get("api_cost") or 0) for row in current_cost_rows)
+            current_priced_tokens = sum(int(row.get("priced_tokens") or 0) for row in current_cost_rows)
+
+            target_model = str(filters.get("target_model") or "").strip()
+            target_cost = 0.0
+            target_priced_runs = 0
+            target_rates = rates_for(target_model, pricing) if target_model else None
+            if target_rates:
+                threshold = int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)
+                for row in covered:
+                    source_input = (
+                        int(row.get("input_tokens") or 0)
+                        + int(row.get("cached_input_tokens") or 0)
+                        + int(row.get("cache_write_input_tokens") or 0)
+                    )
+                    estimate, priced = api_cost(
+                        target_model,
+                        source_input,
+                        int(row.get("cached_input_tokens") or 0),
+                        int(row.get("cache_write_input_tokens") or 0),
+                        int(row.get("output_tokens") or 0),
+                        source_input > threshold,
+                        pricing,
+                    )
+                    if priced:
+                        target_cost += estimate
+                        target_priced_runs += 1
+
+            model_mix = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.model,''),'Unknown')",
+            )
+            agent_name = next(
+                (str(row.get("agent_name") or "") for row in rows if row.get("agent_name")),
+                filters.get("agent") or "Selected agent",
+            )
+
+            return {
+                "ready": True,
+                "tab": "workload",
+                "filters": filters,
+                "requires_agent": False,
+                "metadata": decode_metadata(conn),
+                "agent": {"id": filters.get("agent"), "name": agent_name},
+                "summary": {
+                    "runs": len(rows),
+                    "calendar_days": calendar_days,
+                    "runs_per_day": len(rows) / calendar_days if calendar_days else 0.0,
+                    "token_runs": len(covered),
+                    "token_coverage_pct": len(covered) / len(rows) * 100.0 if rows else 0.0,
+                    "fresh_input_tokens": fresh,
+                    "cached_input_tokens": cached,
+                    "output_tokens": output,
+                    "total_tokens": total,
+                    "avg_tokens_per_token_run": total / len(covered) if covered else 0.0,
+                    "p95_tokens_per_run": percentile_value(run_tokens, .95),
+                    "peak_tokens_per_run": max(run_tokens, default=0.0),
+                    "runtime_ms": runtime_ms,
+                    "avg_runtime_ms": runtime_ms / len(rows) if rows else 0.0,
+                    "p95_runtime_ms": percentile_value(durations, .95),
+                    "current_api_estimate": current_api_cost,
+                    "current_api_coverage_pct": current_priced_tokens / total * 100.0 if total else 0.0,
+                },
+                "target": {
+                    "model": target_model,
+                    "priced": bool(target_rates),
+                    "api_estimate": target_cost if target_rates else None,
+                    "priced_runs": target_priced_runs,
+                    "rates": target_rates,
+                },
+                "model_mix": model_mix,
+                "caveat": (
+                    "This is a workload replay estimate, not a forecast of model behaviour. "
+                    "A different model may tokenize differently, produce different output lengths, "
+                    "cache differently, reason differently, or make different tool calls. "
+                    "Historical workload tokens are not a conversion to subscription quota."
+                ),
+            }
+        finally:
+            conn.close()
+
+    return cached_payload(
+        data_dir, "workload", filters,
+        ("normalized-v1", filters.get("target_model", "")),
+        build,
+    )
 
 
 TAB_BUILDERS = {
@@ -1613,6 +1711,7 @@ TAB_BUILDERS = {
     "insights": insights_payload,
     "activity": activity_payload,
     "sessions": sessions_payload,
+    "workload": workload_payload,
 }
 
 
