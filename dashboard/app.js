@@ -279,7 +279,7 @@ function sessionTable(sessions){
   if(!data.length)return'<div class="empty">No sessions for this selection.</div>';
   const cols=[['session','Session',''],['start','Start',''],['latest','Latest update',''],['model','Top model',''],['agents','Agents','num'],['turns','Turns','num'],['responses','Responses','num'],['compactions','Compacts','num'],['credits','Est. credits','num'],['creditCoverage','Credit cov.','num'],['apiCost','API cost','num'],['apiCoverage','API cov.','num'],['fresh','Fresh input','num'],['cached','Cached input','num'],['output','Output','num'],['total','Total','num'],['duration','Turn time','num'],['maxContext','Max ctx','num'],['failures','Failed','num']];
   const head=cols.map(([k,l,c])=>`<th class="sortable ${c}" data-sort="${k}">${l}<span class="sort-arrow">${sortState.key===k?(sortState.dir<0?'▼':'▲'):''}</span></th>`).join('');
-  const body=data.map(x=>`<tr><td title="${esc(x.name)}">${esc(String(x.name||'').length>62?String(x.name).slice(0,59)+'…':x.name)}</td><td>${fmtDate(x.start,true)}</td><td>${fmtDate(x.latest,true)}</td><td>${modelPill(x.top_model)}</td><td class="num">${fmtExact(x.agents)}</td><td class="num">${fmtExact(x.turns)}</td><td class="num">${fmtExact(x.responses)}</td><td class="num">${fmtExact(x.compactions)}</td><td class="num">${fmtCredits(x.credits)}</td><td class="num">${pct(x.credit_coverage)}</td><td class="num">${fmtUsd(x.api_cost)}</td><td class="num">${pct(x.api_coverage)}</td><td class="num">${fmt(x.fresh)}</td><td class="num">${fmt(x.cached)}</td><td class="num">${fmt(x.output)}</td><td class="num"><b>${fmt(x.total)}</b></td><td class="num">${fmtMs(x.duration)}</td><td class="num">${x.max_context?pct(x.max_context):'—'}</td><td class="num">${fmtExact(x.failures)}</td></tr>`).join('');
+  const body=data.map(x=>`<tr><td title="${esc(x.name)}">${esc(String(x.name||'').length>62?String(x.name).slice(0,59)+'…':x.name)}</td><td>${fmtDate(x.start,true)}</td><td>${fmtDate(x.latest,true)}</td><td>${modelPill(x.top_model)}</td><td class="num">${fmtExact(x.agents)}</td><td class="num">${fmtExact(x.turns)}</td><td class="num">${fmtExact(x.responses)}</td><td class="num">${fmtExact(x.compactions)}</td><td class="num">${fmtCredits(x.credits)}</td><td class="num">${pct(x.credit_coverage)}</td><td class="num">${fmtUsd(x.estimated_api_cost??x.api_cost)}</td><td class="num">${pct(x.api_coverage)}</td><td class="num">${fmt(x.fresh)}</td><td class="num">${fmt(x.cached)}</td><td class="num">${fmt(x.output)}</td><td class="num"><b>${fmt(x.total)}</b></td><td class="num">${fmtMs(x.duration)}</td><td class="num">${x.max_context?pct(x.max_context):'—'}</td><td class="num">${fmtExact(x.failures)}</td></tr>`).join('');
   return`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
@@ -311,6 +311,54 @@ function mcpToolTable(rows){
     <td class="num"><b>${fmtExact(x.calls)}</b></td><td class="num">${n(x.duration_ms)?fmtDuration(x.duration_ms):'—'}</td>
   </tr>`).join('');
   return`<div class="table-wrap"><table><thead><tr><th>MCP integration</th><th>Tool</th><th class="num">Calls</th><th class="num">Recorded time</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function sourceStatusPanel(){
+  const rows=meta?.source_status||[];
+  if(!rows.length)return'';
+  return `<div class="source-status-row">${rows.map(row=>{
+    const status=String(row.status||'unknown'),cls=status==='ok'?'ok':status==='disabled'?'muted':'warn';
+    return `<div class="source-status ${cls}"><span class="status-dot"></span><b>${esc(row.name||row.source_system)}</b><span>${esc(row.message||status)}</span></div>`;
+  }).join('')}</div>`;
+}
+
+function accountDrilldownTable(rows){
+  if(!(rows||[]).length)return'<div class="empty">No account-attributed token usage in this selection.</div>';
+  const body=rows.slice(0,80).map(x=>`<tr>
+    <td>${esc(x.account_name||'Unknown account')}</td>
+    <td>${esc(x.agent_name||'Unknown agent')}</td>
+    <td>${modelPill(x.model_name||x.model||'Unknown')}</td>
+    <td class="num">${fmt(x.total_tokens)}</td>
+    <td class="num">${fmtUsd(x.api_cost)}</td>
+  </tr>`).join('');
+  return `<div class="table-wrap"><table><thead><tr><th>Account / subscription</th><th>Agent</th><th>Model</th><th class="num">Tokens</th><th class="num">API-equivalent</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function quotaPanel(rows,note){
+  if(!(rows||[]).length)return `<div class="note">${esc(note||'No provider quota windows are available.')}</div>`;
+  return `<div class="quota-grid">${rows.map(x=>`<div class="mini"><div class="m-label">${esc(x.provider)} · ${esc(x.label)}</div><div class="m-value">${x.used_percent==null?esc(x.value_label||'—'):pct(x.used_percent)}</div><div class="m-sub">${esc(x.resets_at?'Resets '+fmtDate(x.resets_at,true):(x.detail||x.value_label||''))}</div></div>`).join('')}</div><div class="note">${esc(note||'')}</div>`;
+}
+
+function runTable(rows){
+  if(!(rows||[]).length)return'<div class="empty">No runs for this selection.</div>';
+  const body=rows.map(x=>`<tr>
+    <td>${esc(x.source_system==='paperclip'?'Paperclip':'Codex Desktop')}</td>
+    <td><b>${esc(x.agent_name||'Unknown agent')}</b><div class="hval">${esc(x.run_id||'')}</div></td>
+    <td>${esc(x.account_display_name||'Unknown account')}<div class="hval">${esc(x.billing_mode||'unknown')}</div></td>
+    <td>${esc(x.provider||'unknown')}</td>
+    <td>${modelPill(x.model||'Unknown')}</td>
+    <td>${fmtDate(x.started_utc,true)}</td>
+    <td class="num">${fmtDuration(x.duration_ms)}</td>
+    <td class="num">${n(x.token_metrics_available)?fmt(x.total_tokens):'—'}</td>
+    <td class="num">${x.actual_cost_available?fmtUsd(x.actual_provider_cost_usd):(x.billing_mode==='local'?'No provider charge':'—')}</td>
+    <td class="num">${x.current_api_estimate==null?'—':fmtUsd(x.current_api_estimate)}</td>
+    <td>${esc(x.status||'unknown')}</td>
+  </tr>`).join('');
+  return `<div class="table-wrap runs-table"><table><thead><tr>
+    <th>Source</th><th>Agent / run</th><th>Account</th><th>Provider</th><th>Model</th>
+    <th>Started</th><th class="num">Duration</th><th class="num">Tokens</th>
+    <th class="num">Actual provider</th><th class="num">API-equivalent</th><th>Status</th>
+  </tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function renderToken(data){
