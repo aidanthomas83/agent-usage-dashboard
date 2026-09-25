@@ -58,6 +58,8 @@ jobs:
           PY
       - name: Check dashboard JavaScript syntax
         run: node scripts/check_dashboard_js.mjs
+      - name: Validate Docker Compose configuration
+        run: docker compose config > /dev/null
       - name: Build Docker image
         run: docker build -t agent-usage-dashboard:test .
       - name: Check tracked files for local telemetry and credentials
