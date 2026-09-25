@@ -1015,87 +1015,126 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
 
 
 def token_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
+    pricing = load_pricing(data_dir)
+
     def build():
         conn = open_db(data_dir)
         if conn is None:
             return {"ready": False, "tab": "token"}
         try:
-            where, values = where_for(filters)
+            record_where, record_values = normalized_where(filters, "r")
+            run_where, run_values = normalized_where(filters, "u")
             summary = dict(conn.execute(
-                f"""SELECT COUNT(*) responses,
-                           COUNT(DISTINCT CASE WHEN session_id<>'' THEN session_id END) sessions,
-                           COUNT(DISTINCT CASE WHEN thread_id<>'' THEN thread_id END) threads,
-                           COALESCE(SUM(input_tokens),0) input_tokens,
-                           COALESCE(SUM(cached_input_tokens),0) cached_input_tokens,
-                           COALESCE(SUM(fresh_input_tokens),0) fresh_input_tokens,
-                           COALESCE(SUM(output_tokens),0) output_tokens,
-                           COALESCE(SUM(reasoning_output_tokens),0) reasoning_output_tokens,
-                           COALESCE(SUM(total_tokens),0) total_tokens,
-                           COALESCE(SUM(CASE WHEN agent_type='Subagent' THEN total_tokens ELSE 0 END),0) subagent_tokens,
-                           SUM(CASE WHEN is_compaction='true' THEN 1 ELSE 0 END) compactions
-                      FROM responses{where}""",
-                values,
+                f"""SELECT COUNT(*) usage_records,
+                           COALESCE(SUM(r.fresh_input_tokens),0) fresh_input_tokens,
+                           COALESCE(SUM(r.cached_input_tokens),0) cached_input_tokens,
+                           COALESCE(SUM(r.cache_write_input_tokens),0) cache_write_input_tokens,
+                           COALESCE(SUM(r.output_tokens),0) output_tokens,
+                           COALESCE(SUM(r.reasoning_output_tokens),0) reasoning_output_tokens,
+                           COALESCE(SUM(r.total_tokens),0) total_tokens,
+                           COUNT(DISTINCT CASE WHEN r.session_id<>'' THEN r.session_id END) sessions
+                      FROM usage_records r{record_where}""",
+                record_values,
             ).fetchone())
-            total = float(summary["total_tokens"] or 0)
-            inp = float(summary["input_tokens"] or 0)
-            summary["cache_hit_pct"] = float(summary["cached_input_tokens"] or 0) / inp * 100.0 if inp else 0.0
-            summary["subagent_share_pct"] = float(summary["subagent_tokens"] or 0) / total * 100.0 if total else 0.0
+            run_summary = dict(conn.execute(
+                f"""SELECT COUNT(*) runs,
+                           SUM(CASE WHEN u.token_metrics_available=1 THEN 1 ELSE 0 END) token_runs,
+                           SUM(CASE WHEN u.billing_mode='local' THEN 1 ELSE 0 END) local_runs,
+                           COUNT(DISTINCT CASE WHEN u.account_connection_id<>'' THEN u.account_connection_id END) accounts,
+                           COUNT(DISTINCT CASE WHEN u.provider<>'' THEN u.provider END) providers
+                      FROM usage_runs u{run_where}""",
+                run_values,
+            ).fetchone())
+            summary.update(run_summary)
+            fresh = float(summary.get("fresh_input_tokens") or 0)
+            cached = float(summary.get("cached_input_tokens") or 0)
+            summary["cache_hit_pct"] = cached / (fresh + cached) * 100.0 if fresh + cached else 0.0
+            runs = int(summary.get("runs") or 0)
+            summary["token_coverage_pct"] = (
+                float(summary.get("token_runs") or 0) / runs * 100.0 if runs else 0.0
+            )
 
-            def grouped(expr: str):
-                return rows_as_dicts(conn.execute(
-                    f"""SELECT {expr} AS name,COUNT(*) responses,
-                               SUM(total_tokens) total_tokens,
-                               SUM(fresh_input_tokens) fresh_input_tokens,
-                               SUM(cached_input_tokens) cached_input_tokens,
-                               SUM(output_tokens) output_tokens
-                          FROM responses{where}
-                         GROUP BY {expr}
-                         ORDER BY total_tokens DESC""",
-                    values,
-                ).fetchall())
+            cost_groups = normalized_pricing_groups(conn, filters, [], pricing)
+            summary["api_cost"] = sum(float(row.get("api_cost") or 0) for row in cost_groups)
+            summary["api_priced_tokens"] = sum(int(row.get("priced_tokens") or 0) for row in cost_groups)
+            total_tokens = int(summary.get("total_tokens") or 0)
+            summary["api_coverage_pct"] = (
+                float(summary["api_priced_tokens"]) / total_tokens * 100.0
+                if total_tokens else 0.0
+            )
+            actual = conn.execute(
+                f"""SELECT COALESCE(SUM(r.actual_provider_cost_usd),0) actual_provider_cost,
+                           SUM(CASE WHEN r.actual_cost_available=1 THEN 1 ELSE 0 END) actual_cost_records
+                      FROM usage_records r{record_where}""",
+                record_values,
+            ).fetchone()
+            summary["actual_provider_cost"] = float(actual[0] or 0)
+            summary["actual_cost_records"] = int(actual[1] or 0)
 
-            models = grouped("COALESCE(NULLIF(model,''),'Unknown')")
-            agents = grouped(agent_expr())
-            efforts = grouped("COALESCE(NULLIF(reasoning_effort,''),'Unknown')")
-            agent_types = grouped("COALESCE(NULLIF(agent_type,''),'Unknown')")
             daily_models = rows_as_dicts(conn.execute(
-                f"""SELECT date,COALESCE(NULLIF(model,''),'Unknown') model,
-                           COUNT(*) responses,SUM(total_tokens) total_tokens,
-                           SUM(cached_input_tokens) cached_input_tokens,
-                           SUM(fresh_input_tokens) fresh_input_tokens,
-                           SUM(output_tokens) output_tokens
-                      FROM responses{where}
-                     GROUP BY date,model
-                     ORDER BY date,model""",
-                values,
+                f"""SELECT r.date,
+                           COALESCE(NULLIF(r.model,''),'Unknown') model,
+                           SUM(r.total_tokens) total_tokens,
+                           SUM(r.fresh_input_tokens) fresh_input_tokens,
+                           SUM(r.cached_input_tokens) cached_input_tokens,
+                           SUM(r.output_tokens) output_tokens
+                      FROM usage_records r{record_where}
+                     GROUP BY r.date,model
+                     ORDER BY r.date,model""",
+                record_values,
             ).fetchall())
 
-            selected_roles = {str(r["name"]).lower() for r in agents}
-            historical_roles = {
-                str(r[0]).lower()
-                for r in conn.execute(f"SELECT DISTINCT {agent_expr()} FROM responses").fetchall()
-                if r[0]
-            }
-            configured = []
-            for row in conn.execute("SELECT name FROM configured_agents ORDER BY name").fetchall():
-                name = str(row[0] or "")
-                key = name.lower()
-                configured.append({
-                    "name": name,
-                    "status": "used_selected" if key in selected_roles else ("used_historical" if key in historical_roles else "never_seen"),
-                })
+            models = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.model,''),'Unknown')",
+            )
+            agents = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.agent_id,''),'unknown')",
+                "COALESCE(NULLIF({a}.agent_name,''),'Unknown agent')",
+            )
+            providers = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.provider,''),'unknown')",
+            )
+            billings = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.billing_mode,''),'unknown')",
+            )
+            accounts = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.account_connection_id,''),'__unknown__')",
+                "COALESCE(NULLIF({a}.account_display_name,''),'Unknown account')",
+            )
+            sources = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.source_system,''),'unknown')",
+            )
+            for row in sources:
+                row["name"] = source_label(str(row.get("id") or ""))
 
             return {
-                "ready": True, "tab": "token", "filters": filters,
-                "metadata": decode_metadata(conn), "summary": summary,
-                "models": models, "agents": agents, "efforts": efforts,
-                "agent_types": agent_types, "daily_models": daily_models,
-                "configured_agents": configured,
+                "ready": True,
+                "tab": "token",
+                "filters": filters,
+                "metadata": decode_metadata(conn),
+                "summary": summary,
+                "daily_models": daily_models,
+                "models": models,
+                "agents": agents,
+                "providers": providers,
+                "billing_modes": billings,
+                "accounts": accounts,
+                "sources": sources,
+                "pricing": {
+                    "as_of": pricing.get("as_of"),
+                    "source_url": pricing.get("source_url"),
+                },
             }
         finally:
             conn.close()
 
-    return cached_payload(data_dir, "token", filters, (), build)
+    return cached_payload(data_dir, "token", filters, ("normalized-v1",), build)
 
 
 def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
