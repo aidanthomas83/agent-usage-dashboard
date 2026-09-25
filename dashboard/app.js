@@ -44,8 +44,14 @@ const MODEL_COLORS={
 };
 const COLOR_POOL=['#0876db','#ee8726','#37ae69','#e85d9e','#7c3aed','#159a8c','#c07d12','#d64f5f','#3c8fd6','#8e6c4c','#4d9a9a','#a661c2'];
 const AGENT_COLORS={'Main':'#5f6b78','executor':'#0876db','guardian_review':'#7c5ce5','reviewer':'#e85d9e','planner':'#ee8726','researcher':'#37ae69','security_review':'#d64f5f'};
+const BILLING_COLORS={subscription:'#0876db',api:'#ee8726',local:'#37ae69',unknown:'#9aa4b2'};
+const PROVIDER_COLORS={openai:'#0876db',anthropic:'#c07d12',ollama:'#37ae69',openrouter:'#7c3aed',google:'#d64f5f',xai:'#159a8c',unknown:'#9aa4b2'};
 const modelColor = name => MODEL_COLORS[String(name||'Unknown').toLowerCase()] || COLOR_POOL[hash('model:'+name)%COLOR_POOL.length];
 const agentColor = name => AGENT_COLORS[String(name||'Subagent')] || COLOR_POOL[hash('agent:'+name)%COLOR_POOL.length];
+const providerColor = name => PROVIDER_COLORS[String(name||'unknown').toLowerCase()] || COLOR_POOL[hash('provider:'+name)%COLOR_POOL.length];
+const billingColor = name => BILLING_COLORS[String(name||'unknown').toLowerCase()] || COLOR_POOL[hash('billing:'+name)%COLOR_POOL.length];
+const accountColor = name => COLOR_POOL[hash('account:'+name)%COLOR_POOL.length];
+const sourceColor = name => String(name||'').toLowerCase().includes('paperclip')?'#7c3aed':'#0876db';
 const effortColor = name => ({medium:'#0876db',high:'#7c5ce5',low:'#37ae69'}[String(name||'').toLowerCase()] || COLOR_POOL[hash('effort:'+name)%COLOR_POOL.length]);
 const skillColor = name => COLOR_POOL[hash('skill:'+name)%COLOR_POOL.length];
 
@@ -59,7 +65,7 @@ let refreshMode='days';
 let sortState={key:'total',dir:-1};
 let pricingMessage='';
 const clientCache=new Map();
-const validTabs=new Set(['token','subscription','insights','activity','sessions']);
+const validTabs=new Set(['token','subscription','workload','activity','insights','sessions']);
 
 function showLoading(title='Loading Codex usage…',sub='Reading local analytics database'){
   $('loadingTitle').textContent=title;$('loadingSub').textContent=sub;$('loadingOverlay').classList.add('show');
@@ -68,12 +74,22 @@ function hideLoading(){$('loadingOverlay').classList.remove('show');}
 function setOptions(id,values,label){
   $(id).innerHTML=`<option value="">${esc(label)}</option>`+values.map(v=>`<option value="${escAttr(v)}">${esc(v)}</option>`).join('');
 }
+function setNamedOptions(id,values,label){
+  $(id).innerHTML=`<option value="">${esc(label)}</option>`+(values||[]).map(v=>{
+    const item=typeof v==='string'?{id:v,name:v}:v;
+    return `<option value="${escAttr(item.id??item.value??item.name)}">${esc(item.name??item.label??item.id)}</option>`;
+  }).join('');
+}
 function shiftIsoDate(iso,days){if(!iso)return'';const [y,m,d]=iso.split('-').map(Number),dt=new Date(Date.UTC(y,m-1,d+days));return dt.toISOString().slice(0,10);}
 function clampDate(value){if(!value)return value;if(meta?.data_min&&value<meta.data_min)return meta.data_min;if(meta?.data_max&&value>meta.data_max)return meta.data_max;return value;}
 function filters(){
   return {
-    from:$('fromDate').value,to:$('toDate').value,model:$('modelFilter').value,
-    agent:$('agentFilter').value,effort:$('effortFilter').value,project:$('projectFilter').value
+    from:$('fromDate').value,to:$('toDate').value,
+    source:$('sourceFilter').value,billing:$('billingFilter').value,
+    provider:$('providerFilter').value,account:$('accountFilter').value,
+    agent:$('agentFilter').value,model:$('modelFilter').value,
+    effort:$('effortFilter').value,project:$('projectFilter').value,
+    target_model:activeTab==='workload'?$('targetModelFilter').value:''
   };
 }
 function queryString(obj){const q=new URLSearchParams();Object.entries(obj).forEach(([k,v])=>{if(v)q.set(k,v)});return q.toString();}
@@ -106,21 +122,31 @@ function updateRangeStatus(){
 
 function initFilters(preserve=false){
   const previous=preserve?filters():null;
+  setNamedOptions('sourceFilter',meta?.sources||[],'All sources');
+  setOptions('billingFilter',meta?.billing_modes||[],'All billing modes');
+  setOptions('providerFilter',meta?.providers||[],'All providers');
+  setNamedOptions('accountFilter',meta?.accounts||[],'All accounts');
+  setNamedOptions('agentFilter',meta?.agents||[],'All agents');
   setOptions('modelFilter',meta?.models||[],'All models');
-  setOptions('agentFilter',meta?.agents||[],'All roles');
   setOptions('effortFilter',meta?.efforts||[],'All efforts');
   setOptions('projectFilter',meta?.projects||[],'All projects');
+  setOptions('targetModelFilter',meta?.target_models||[],'Choose target model');
   const from=$('fromDate'),to=$('toDate');
   from.min=meta?.data_min||'';from.max=meta?.data_max||'';to.min=meta?.data_min||'';to.max=meta?.data_max||'';
   if(previous){
     from.value=clampDate(previous.from||meta?.data_min||'');to.value=clampDate(previous.to||meta?.data_max||'');
-    $('modelFilter').value=(meta.models||[]).includes(previous.model)?previous.model:'';
-    $('agentFilter').value=(meta.agents||[]).includes(previous.agent)?previous.agent:'';
-    $('effortFilter').value=(meta.efforts||[]).includes(previous.effort)?previous.effort:'';
-    $('projectFilter').value=(meta.projects||[]).includes(previous.project)?previous.project:'';
+    const restores={
+      sourceFilter:previous.source,billingFilter:previous.billing,providerFilter:previous.provider,
+      accountFilter:previous.account,agentFilter:previous.agent,modelFilter:previous.model,
+      effortFilter:previous.effort,projectFilter:previous.project,targetModelFilter:previous.target_model
+    };
+    Object.entries(restores).forEach(([id,value])=>{
+      if(value&&[...$(id).options].some(o=>o.value===value))$(id).value=value;
+    });
   }else{
     from.value=meta?.data_min||'';to.value=meta?.data_max||'';
   }
+  $('targetModelFilterWrap').hidden=activeTab!=='workload';
   updateQuickButtons();updateRangeStatus();
 }
 
@@ -162,7 +188,7 @@ async function loadDashboard(showBusy=true,force=false){
 }
 
 function tabLabel(tab){
-  return ({token:'Token usage',subscription:'Subscription value',insights:'Useful insights',activity:'Activity over time',sessions:'Highest-usage sessions'})[tab]||tab;
+  return ({token:'AI usage',subscription:'Subscription value',workload:'Workload estimator',insights:'Codex diagnostics',activity:'Activity & tools',sessions:'Runs'})[tab]||tab;
 }
 function updateTabButtons(){
   document.querySelectorAll('.tab-btn').forEach(btn=>btn.classList.toggle('active',btn.dataset.tab===activeTab));
@@ -170,6 +196,7 @@ function updateTabButtons(){
 async function switchTab(tab){
   if(!validTabs.has(tab)||tab===activeTab)return;
   activeTab=tab;dashboard=null;updateTabButtons();history.replaceState(null,'','#'+tab);
+  $('targetModelFilterWrap').hidden=activeTab!=='workload';
   $('content').innerHTML='';await loadDashboard(true);
 }
 
@@ -534,7 +561,7 @@ async function startRefresh(){
 }
 function showRefreshBanner(state){
   const b=$('refreshBanner'),text=$('refreshBannerText');b.className='refresh-banner show '+(state.status==='completed'?'done':state.status==='failed'?'failed':'');
-  if(state.status==='running'){b.querySelector('.spinner').style.display='block';text.textContent=state.message||'Refreshing Codex telemetry in the background…';}
+  if(state.status==='running'){b.querySelector('.spinner').style.display='block';text.textContent=state.message||'Refreshing AI usage telemetry in the background…';}
   else{b.querySelector('.spinner').style.display='none';text.textContent=state.message||state.status;}
 }
 function startRefreshPolling(initial){
@@ -557,7 +584,7 @@ function startRefreshPolling(initial){
 function bind(){
   document.querySelectorAll('.quick-range').forEach(btn=>btn.addEventListener('click',()=>setQuickRange(Number(btn.dataset.days))));
   document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
-  ['fromDate','toDate','modelFilter','agentFilter','effortFilter','projectFilter'].forEach(id=>$(id).addEventListener('change',applyFilters));
+  ['fromDate','toDate','sourceFilter','billingFilter','providerFilter','accountFilter','agentFilter','modelFilter','effortFilter','projectFilter','targetModelFilter'].forEach(id=>$(id).addEventListener('change',applyFilters));
   $('resetBtn').addEventListener('click',resetFilters);
   $('refreshDataBtn').addEventListener('click',openRefreshModal);
   $('closeRefreshModal').addEventListener('click',closeRefreshModal);
