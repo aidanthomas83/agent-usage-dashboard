@@ -148,6 +148,20 @@ def main() -> int:
         server.migrate_existing_database(data_dir, data_dir / "codex-home")
         normalized = usage_model.sync_codex_usage(db, None)
         assert normalized == {"records": 1, "runs": 1}, normalized
+        with sqlite3.connect(db) as conn:
+            usage_model.upsert_account(
+                conn, usage_model.SOURCE_CODEX, "codex-desktop",
+                "Renamed Codex Account", "openai", "subscription",
+            )
+            conn.execute(
+                "UPDATE usage_records SET account_display_name='Historical Codex Name' "
+                "WHERE account_connection_id='codex-desktop'"
+            )
+            conn.execute(
+                "UPDATE usage_runs SET account_display_name='Historical Codex Name' "
+                "WHERE account_connection_id='codex-desktop'"
+            )
+            conn.commit()
 
         with sqlite3.connect(db) as conn:
             after = conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
@@ -172,6 +186,9 @@ def main() -> int:
 
         assert token["ready"] and token["summary"]["usage_records"] == 1, token
         assert token["summary"]["runs"] == 1, token
+        assert len(token["accounts"]) == 1, token["accounts"]
+        assert token["accounts"][0]["id"] == "codex-desktop", token["accounts"]
+        assert token["accounts"][0]["name"] == "Renamed Codex Account", token["accounts"]
         assert subscription["ready"] and subscription["summary"]["api_cost"] > 0, subscription
         assert subscription["runtime_summary"]["agent_compute_ms"] == 5000, subscription["runtime_summary"]
         assert subscription["runtime_agents"][0]["name"] == "executor", subscription["runtime_agents"]
