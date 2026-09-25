@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import collect_codex_usage as collector
+import usage_model
 import server
 
 
@@ -138,6 +139,8 @@ def main() -> int:
         (skills_root / "unused-skill").mkdir(parents=True)
         (skills_root / "unused-skill" / "SKILL.md").write_text("---\nname: unused-skill\n---\n", encoding="utf-8")
         server.migrate_existing_database(data_dir, data_dir / "codex-home")
+        normalized = usage_model.sync_codex_usage(db, None)
+        assert normalized == {"records": 1, "runs": 1}, normalized
 
         with sqlite3.connect(db) as conn:
             after = conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0]
@@ -150,7 +153,9 @@ def main() -> int:
 
         filters = {
             "from": "2026-09-23", "to": "2026-09-23",
+            "source": "", "billing": "", "provider": "", "account": "",
             "model": "", "agent": "", "effort": "", "project": "",
+            "target_model": "",
         }
         token = server.token_payload(data_dir, filters)
         subscription = server.subscription_payload(data_dir, filters)
@@ -158,11 +163,12 @@ def main() -> int:
         activity = server.activity_payload(data_dir, filters)
         sessions = server.sessions_payload(data_dir, filters)
 
-        assert token["ready"] and token["summary"]["responses"] == 1, token
+        assert token["ready"] and token["summary"]["usage_records"] == 1, token
+        assert token["summary"]["runs"] == 1, token
         assert subscription["ready"] and subscription["summary"]["api_cost"] > 0, subscription
         assert subscription["runtime_summary"]["agent_compute_ms"] == 5000, subscription["runtime_summary"]
         assert subscription["runtime_agents"][0]["name"] == "executor", subscription["runtime_agents"]
-        assert subscription["runtime_agents"][0]["api_cost"] > 0, subscription["runtime_agents"]
+        assert subscription["runtime_agents"][0]["estimated_api_cost"] > 0, subscription["runtime_agents"]
         assert insights["skill_summary"]["skill_invocations"] == 1, insights
         assert activity["skill_invocations"] == 1 and activity["distinct_skills"] == 1, activity
         assert activity["mcp_integrations"][0]["name"] == "Codebase Memory", activity["mcp_integrations"]
@@ -214,7 +220,14 @@ def main() -> int:
         statuses = {row["name"]: row["status"] for row in activity["configured_skills"]}
         assert statuses["coding-standards"] == "used_selected", statuses
         assert statuses["unused-skill"] == "never_seen", statuses
-        assert len(sessions["sessions"]) == 1 and sessions["sessions"][0]["api_cost"] > 0, sessions
+        assert len(sessions["sessions"]) == 1 and sessions["sessions"][0]["current_api_estimate"] > 0, sessions
+
+        workload_filters = dict(filters)
+        workload_filters.update({"agent": "codex:role:executor", "target_model": "gpt-6-sol"})
+        workload = server.workload_payload(data_dir, workload_filters)
+        assert workload["ready"] and not workload["requires_agent"], workload
+        assert workload["summary"]["runs"] == 1, workload
+        assert workload["target"]["priced"] and workload["target"]["api_estimate"] > 0, workload
 
         # Incremental dashboard refresh must replace only selected dates and
         # leave historical partitions untouched.
@@ -261,6 +274,7 @@ def main() -> int:
             {"generated_at": "2026-09-23T11:00:00+10:00"},
             ["date"],
         )
+        usage_model.sync_codex_usage(db, {"2026-09-23"})
         with sqlite3.connect(db) as conn:
             sep22 = conn.execute("SELECT COUNT(*),SUM(total_tokens) FROM responses WHERE date='2026-09-22'").fetchone()
             sep23 = conn.execute("SELECT COUNT(*),SUM(total_tokens) FROM responses WHERE date='2026-09-23'").fetchone()
