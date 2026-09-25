@@ -13,7 +13,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
 
 WORKDIR /app
 
-COPY collect_codex_usage.py server.py ./
+COPY collect_codex_usage.py collect_paperclip_usage.py usage_model.py server.py ./
 COPY dashboard ./dashboard
 
 RUN mkdir -p /app/data /codex && \
