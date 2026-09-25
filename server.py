@@ -1456,23 +1456,25 @@ def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
         if conn is None:
             return {"ready": False, "tab": "activity"}
         try:
-            where, values = where_for(filters)
+            record_where, record_values = normalized_where(filters, "r")
             daily_models = rows_as_dicts(conn.execute(
-                f"""SELECT date,COALESCE(NULLIF(model,''),'Unknown') model,SUM(total_tokens) total_tokens
-                      FROM responses{where}
-                     GROUP BY date,model ORDER BY date,model""",
-                values,
+                f"""SELECT r.date,COALESCE(NULLIF(r.model,''),'Unknown') model,
+                           SUM(r.total_tokens) total_tokens
+                      FROM usage_records r{record_where}
+                     GROUP BY r.date,model ORDER BY r.date,model""",
+                record_values,
             ).fetchall())
 
-            turn_where, turn_values = where_for(filters)
+            run_where, run_values = normalized_where(filters, "u")
             turns_by_model = rows_as_dicts(conn.execute(
-                f"""SELECT date,COALESCE(NULLIF(model,''),'Unknown') model,COUNT(*) turns
-                      FROM turns{turn_where}
-                     GROUP BY date,model ORDER BY date,model""",
-                turn_values,
+                f"""SELECT u.date,COALESCE(NULLIF(u.model,''),'Unknown') model,
+                           COUNT(*) turns
+                      FROM usage_runs u{run_where}
+                     GROUP BY u.date,model ORDER BY u.date,model""",
+                run_values,
             ).fetchall())
 
-            runtime = runtime_breakdown(conn, filters, pricing)
+            runtime = normalized_runtime_breakdown(conn, filters, pricing)
             runtime_summary = runtime["summary"]
             runtime_daily = runtime["daily"]
             runtime_by_agent = runtime["by_agent_daily"]
@@ -1551,7 +1553,7 @@ def activity_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
         finally:
             conn.close()
 
-    return cached_payload(data_dir, "activity", filters, (), build)
+    return cached_payload(data_dir, "activity", filters, ("normalized-runtime-v1",), build)
 
 
 def sessions_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
