@@ -31,6 +31,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+import usage_model
+
 # Current ChatGPT Business / Codex token-based credit rate card, 23 Sep 2026.
 # Rates are credits per 1M *uncached input*, cached input, and output tokens.
 # GPT-5.6 Sol promotional purchased-credit pricing is reflected here.
@@ -1893,7 +1895,7 @@ def main() -> int:
         "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
         "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
         "api_cost_note":"Counterfactual Standard OpenAI API token cost at today's rates. Includes cached-input and cache-write pricing plus documented >272K long-context multipliers. Excludes separate tool-call, web-search, container, storage, regional-processing, and other non-token API charges.",
-        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts use token_count.info.last_token_usage while cumulative totals are retained only as a change detector, preventing inherited fork history from being counted as a new response and preserving requests across counter resets. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
     }
 
     if args.sqlite_only and database_path.exists():
@@ -1901,6 +1903,11 @@ def main() -> int:
         metadata=update_sqlite_range(
             database_path,selected,rebuilt_records,rebuilt_turns,rebuilt_activity,rebuilt_limits,
             agents,skills,common_metadata,daily_fields,
+        )
+        normalized=usage_model.sync_codex_usage(database_path,selected)
+        print(
+            f"Normalized Codex usage: {normalized['records']:,} response record(s), {normalized['runs']:,} run(s).",
+            flush=True,
         )
         print(f"Refresh complete: {len(rebuilt_records):,} responses, {len(rebuilt_turns):,} turns, {len(rebuilt_activity):,} activities.", flush=True)
         return 0
@@ -1937,10 +1944,15 @@ def main() -> int:
         "credit_note":"Estimated token-based Codex credits using the current Business rate card. Cache writes are not charged. Fast/priority multipliers are applied only where publicly documented; unpriced models/tier combinations are excluded rather than guessed.",
         "api_price_as_of":API_PRICE_AS_OF,"api_price_source":API_PRICE_SOURCE,
         "api_cost_note":"Counterfactual Standard OpenAI API token cost at today's rates. Includes cached-input and cache-write pricing plus documented >272K long-context multipliers. Excludes separate tool-call, web-search, container, storage, regional-processing, and other non-token API charges.",
-        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts are recovered from positive deltas in token_count.info.total_token_usage, which avoids repeated last_token_usage snapshots. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
+        "accounting_note":"Newer usage comes from per-response token_usage_record rows. Older rollouts use token_count.info.last_token_usage while cumulative totals are retained only as a change detector, preventing inherited fork history from being counted as a new response and preserving requests across counter resets. Rows are deduplicated by (thread_id,response_id). Reasoning output is a subset of output and is not added again. Tool/activity datasets store names/counts only, not prompt/tool content.",
         "usage_source_counts":dict(sorted({src:sum(1 for r in records if str(r.get("usage_source") or "")==src) for src in {str(r.get("usage_source") or "") for r in records if r.get("usage_source")}}.items())),
     }
     write_sqlite_snapshot(database_path,records,turns,activities,limits,daily,agents,skills,metadata,daily_fields)
+    normalized=usage_model.sync_codex_usage(database_path,None)
+    print(
+        f"Normalized Codex usage: {normalized['records']:,} response record(s), {normalized['runs']:,} run(s).",
+        flush=True,
+    )
     stale_browser_bundle=output_dir/"codex_usage_data.js"
     try:
         stale_browser_bundle.unlink()
