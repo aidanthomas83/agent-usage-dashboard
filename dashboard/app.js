@@ -364,23 +364,31 @@ function runTable(rows){
 function renderToken(data){
   const s=data.summary||{},total=n(s.total_tokens);
   return`
-    <div class="tab-title"><div><h2>Token usage</h2><p>Model, agent, cache and reasoning mix for the selected period.</p></div></div>
-    <div class="kpis compact">
-      ${kpi('Total tokens',fmt(total),`${fmtExact(s.responses)} model responses`,'var(--blue)')}
-      ${kpi('Fresh input',fmt(s.fresh_input_tokens),`${pct(n(s.input_tokens)?n(s.fresh_input_tokens)/n(s.input_tokens)*100:0)} of input`,'var(--orange)')}
-      ${kpi('Cached input',fmt(s.cached_input_tokens),`${pct(s.cache_hit_pct)} cache share`,'var(--teal)')}
-      ${kpi('Output',fmt(s.output_tokens),`${fmt(s.reasoning_output_tokens)} reasoning subset`,'var(--pink)')}
-      ${kpi('Sessions',fmtExact(s.sessions),`${fmtExact(s.threads)} threads`,'var(--purple)')}
-      ${kpi('Subagent share',pct(s.subagent_share_pct),`${fmtExact(s.compactions)} compaction responses`,'var(--slate)')}
+    <div class="tab-title"><div><h2>AI usage</h2><p>Unified workload across Codex Desktop, Paperclip, cloud providers and local models.</p></div></div>
+    ${sourceStatusPanel()}
+    <div class="kpis compact usage-kpis">
+      ${kpi('Total workload tokens',fmt(total),`${fmtExact(s.runs)} runs · ${pct(s.token_coverage_pct)} run coverage`,'var(--blue)',n(s.token_coverage_pct)<80)}
+      ${kpi('Fresh input',fmt(s.fresh_input_tokens),'Non-cached input where reported','var(--orange)')}
+      ${kpi('Cached input',fmt(s.cached_input_tokens),`${pct(s.cache_hit_pct)} of readable input`,'var(--teal)')}
+      ${kpi('Output',fmt(s.output_tokens),`${fmt(s.reasoning_output_tokens)} recorded reasoning subset`,'var(--pink)')}
+      ${kpi('API-equivalent estimate',fmtUsd(s.api_cost),`${pct(s.api_coverage_pct)} token pricing coverage`,'var(--green)',n(s.api_coverage_pct)<80)}
+      ${kpi('Reported provider charge',fmtUsd(s.actual_provider_cost),`${fmtExact(s.actual_cost_records)} usage record(s) report cost`,'var(--purple)')}
+      ${kpi('Local runs',fmtExact(s.local_runs),'No provider charge; hardware/electricity not estimated','var(--green)')}
+      ${kpi('Accounts used',fmtExact(s.accounts),`${fmtExact(s.providers)} provider(s)`,'var(--slate)')}
     </div>
-    <div class="panel full-panel"><h3>Daily token mix</h3><div class="desc">Stacked by model. Hover a day to see total, cached input, fresh input, output and model values.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[])}</div></div>
-    <div class="panel full-panel mt"><h3>Models</h3><div class="desc">Total token traffic by recorded model.</div>${hbars(data.models||[],total,modelColor,fmt,14)}</div>
-    <div class="token-detail-grid mt">
-      <div class="panel"><h3>Agents / roles</h3><div class="desc">Main thread and recorded subagent roles. Configured agents that have not been observed are included below.</div>${hbars(data.agents||[],total,agentColor,fmt,16)}<div class="skill-status-panel">${statusPills(data.configured_agents||[],'No configured agents were found in .codex/agents.')}</div></div>
-      <div class="side-stack">
-        <div class="panel panel-tight"><h3>Reasoning effort</h3><div class="desc">Token traffic grouped by recorded effort.</div>${hbars(data.efforts||[],total,effortColor,fmt,8)}</div>
-        <div class="panel panel-tight"><h3>Response volume</h3><div class="desc">Model responses by main thread vs subagent.</div>${hbars((data.agent_types||[]).map(x=>({...x,total_tokens:x.responses})),n(s.responses),agentColor,fmtExact,4)}</div>
-      </div>
+    <div class="panel full-panel"><h3>Daily token mix</h3><div class="desc">Stacked by model across the current source/account/provider filters. Runs with unavailable token counters remain in run metrics but do not fabricate token values.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[])}</div></div>
+
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Providers</h3><div class="desc">Token workload and run count by provider.</div>${hbars(data.providers||[],total,providerColor,fmt,14)}</div>
+      <div class="panel"><h3>Billing modes</h3><div class="desc">Subscription, API, local and unresolved workload.</div>${hbars(data.billing_modes||[],total,billingColor,fmt,10)}</div>
+    </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Accounts / subscriptions</h3><div class="desc">Run-level account attribution. Paperclip uses the immutable connection id internally while displaying its current human-readable name.</div>${hbars(data.accounts||[],total,accountColor,fmt,16)}</div>
+      <div class="panel"><h3>Agents</h3><div class="desc">Workload attributed to the agent that handled each run.</div>${hbars(data.agents||[],total,agentColor,fmt,16)}</div>
+    </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Models</h3><div class="desc">Total token traffic by recorded model.</div>${hbars(data.models||[],total,modelColor,fmt,16)}</div>
+      <div class="panel"><h3>Sources</h3><div class="desc">Collector source. Default all-source totals suppress a Codex record only when a matching Paperclip session proves overlap.</div>${hbars(data.sources||[],total,sourceColor,fmt,8)}</div>
     </div>
   `;
 }
