@@ -1,37 +1,112 @@
-# Agent Usage Dashboard
+# AI Agent Usage Dashboard
 
-A local, Dockerized dashboard for analysing Codex usage from the rollout telemetry stored under `~/.codex`.
+A local Docker dashboard for measuring AI-agent workload across the existing Codex telemetry store and Paperclip-managed agents.
 
-The application is designed to answer questions such as:
-
-- Which models and agents are consuming the most capacity?
-- How much input is fresh vs cached?
-- How much would the selected token usage cost through the OpenAI API at the embedded current rate card?
-- Which sessions, agents and reasoning levels are most expensive?
-- How much compaction and skill activity is occurring?
-- What value am I getting from my Codex / ChatGPT subscription?
+The application keeps the detailed Codex analysis that already existed while adding a normalized provider-agnostic layer for agents, providers, models, billing modes, accounts/subscriptions, local models, runtime and cost comparison.
 
 ## Architecture
 
 ```text
-~/.codex (read-only)
-      |
-      v
-collector
-      |
-      v
-data/codex_usage.sqlite
-      |
-      v
-local Python API
-      |
-      v
-http://127.0.0.1:8765
+~/.codex rollouts (read-only)             Paperclip HTTP API (read-only)
+            |                                       |
+            v                                       v
+ collect_codex_usage.py                  collect_paperclip_usage.py
+            |                                       |
+            +-------------------+-------------------+
+                                |
+                                v
+                    normalized usage model
+                 usage_records / usage_runs
+                                |
+                                v
+                    data/codex_usage.sqlite
+                                |
+                                v
+                         local Python API
+                                |
+                                v
+                     http://127.0.0.1:8765
 ```
 
-The browser no longer loads a generated `codex_usage_data.js` file. Dashboard queries are executed against SQLite and returned asynchronously as small aggregated JSON responses. Each dashboard tab has its own query path, and identical tab/filter queries are cached in memory until the database or pricing data changes.
+The retained Codex tables continue powering Codex-specific context, compaction, skills, rate-limit and MCP-tool diagnostics. `usage_model.py` projects Codex into the normalized tables and Paperclip feeds the same model.
 
-The detailed CSV files are still produced as local exports/debugging data, but they are not used by the dashboard runtime.
+Normal analytics do not browse the Paperclip Docker volume or ACP session files. The integration uses Paperclip HTTP APIs and does not persist prompts, tool arguments, credentials, vault data or authentication tokens.
+
+## Normalized usage
+
+`usage_records` stores additive usage observations and `usage_runs` stores run/turn lifecycle data. Important dimensions include:
+
+- source system (`codex_desktop` or `paperclip`)
+- run/session identity and timestamps
+- agent id/name/role
+- provider, runtime/harness and model
+- billing mode: `subscription`, `api`, `local` or `unknown`
+- immutable account/connection id plus a current human-readable display name
+- fresh/cached/cache-write/output/reasoning/total tokens when available
+- actual provider charge when the source reports it
+- current API-equivalent estimated cost when the model is priced
+- task/project ids where available
+- duration/status
+
+Runs with unavailable token counters are still retained. The dashboard shows the metrics that exist instead of inventing missing values.
+
+### Cross-source duplicate protection
+
+When a Paperclip run and Codex telemetry expose the same durable provider-session id, default all-source views prefer Paperclip for run/account attribution. Codex response tokens are suppressed only when the matching Paperclip run also exposes token metrics. Explicit Source filters still let you inspect either source independently.
+
+No fuzzy matching is used.
+
+## Paperclip integration
+
+The collector uses read-only GET requests to the supported Paperclip API, including:
+
+- `/api/companies`
+- `/api/companies/:companyId/agents`
+- `/api/companies/:companyId/ai-connections`
+- `/api/companies/:companyId/heartbeat-runs`
+- `/api/companies/:companyId/costs/quota-windows`
+
+Paperclip heartbeat-run `usageJson` is the run-level usage source. Aggregate cost APIs are not added back into token totals, avoiding a second copy of the same workload.
+
+### Account/subscription attribution
+
+Account attribution is run-level, not agent-level. The collector reads the run's `contextSnapshot.aiConnection.connectionId` and resolves that immutable id against the AI-connection catalogue.
+
+This allows multiple agents to share an account and lets one agent move from Subscription A to Subscription B later without rewriting history. Account display-name changes also do not split historical identity: the immutable connection id remains the grouping key and the current catalogue label is used for display.
+
+If a connection cannot be resolved, its stable id is retained and the display label is `Unknown account`; the dashboard does not guess.
+
+## Configuration
+
+Paperclip normally needs no extra setup when one company is visible and the local API accepts the container request. The Docker default is:
+
+```env
+PAPERCLIP_ENABLED=true
+PAPERCLIP_BASE_URL=http://host.docker.internal:3100
+PAPERCLIP_COMPANY_ID=
+PAPERCLIP_API_TOKEN=
+PAPERCLIP_TIMEOUT_SECONDS=10
+```
+
+Copy `.env.example` to a local `.env` only if you need overrides.
+
+- Set `PAPERCLIP_COMPANY_ID` when more than one company is visible. The collector refuses to guess.
+- Set `PAPERCLIP_API_TOKEN` only if the Paperclip instance requires it. It remains server-side and is never exposed to browser JavaScript.
+- Set `PAPERCLIP_ENABLED=false` to disable Paperclip collection while retaining Codex.
+
+## Local / Ollama usage
+
+Paperclip/OpenCode runs routed to Ollama are represented as local billing. For example:
+
+```text
+Provider:     Ollama
+Billing mode: Local
+Account:      Local Ollama
+Runtime:      OpenCode
+Model:        gpt-oss:20b
+```
+
+If token usage is reported, it is captured. If not, the run still contributes its agent/model/timestamps/duration. Local execution is labelled `No provider charge`; this does not claim hardware and electricity have zero economic cost.
 
 ## Start the dashboard
 
@@ -40,190 +115,154 @@ Prerequisites:
 - Docker Desktop
 - this repository cloned locally
 - Codex data at `%USERPROFILE%\.codex` on Windows
-
-From the repository folder, build and start it once:
+- Paperclip on port 3100 if Paperclip collection is wanted
 
 ```powershell
 docker compose up -d --build
 ```
 
-Then open:
+Open `http://127.0.0.1:8765`.
 
-```text
-http://127.0.0.1:8765
-```
-
-The container uses `restart: unless-stopped`, so after the first setup Docker Desktop can restart it automatically when Docker starts.
-
-To stop it:
-
-```powershell
-docker compose stop
-```
-
-To start it again:
-
-```powershell
-docker compose start
-```
-
-To rebuild after pulling source changes:
+After pulling changes:
 
 ```powershell
 git pull
 docker compose up -d --build
 ```
 
-## Refresh data from the dashboard
+## Refresh behavior
 
-Use **Refresh data** in the top-right of the dashboard.
+Use **Refresh data** in the dashboard. One refresh workflow now runs the existing Codex collector, projects Codex into the normalized model, runs the read-only Paperclip collector, marks proven cross-source overlaps and clears the dashboard cache.
 
-Two refresh modes are supported:
+Supported modes are **Last N days**, **Date range**, and the Codex **Full rollout scan** option for historical/parser backfills.
 
-- **Last N days** — e.g. 7, 30, 60 or 90 days.
-- **Date range** — explicitly select the first and last dates to rebuild.
+Selected date partitions are replaced rather than appended, so repeated refreshes are idempotent. If Paperclip is unavailable, previous Paperclip data is retained, its Source status becomes unavailable, and successful Codex data remains usable.
 
-Refreshes run in the background. The existing dashboard remains usable while the collector is working, and the page automatically reloads the SQLite-backed measurements after the refresh completes. The refresh banner reports live collector phases such as rollout discovery, parse progress, and the final SQLite update.
+## Filters
 
-Dashboard-triggered refreshes use an **incremental SQLite path**: only the selected date partitions are rebuilt and replaced. They do not reread retained CSV history, rewrite every export, rebuild the whole database, or recreate every index.
+The global filter row supports:
 
-There is also a **Full rollout scan** option. Use this for historical backfills or after changes to the rollout parser. Normal incremental refreshes do not usually need it.
-
-Refreshes remain idempotent: the selected local calendar dates are rebuilt rather than appended, so rerunning the same range does not duplicate usage. The standalone CLI still performs the full CSV/export workflow when you explicitly need updated export files.
-
-## Docker mounts and privacy
-
-The Compose configuration mounts:
-
-```text
-%USERPROFILE%/.codex  ->  /codex     read-only
-./data                ->  /app/data  read/write
-```
-
-The Codex source mount is deliberately **read-only**. The collector cannot modify the local Codex sessions or agent definitions.
-
-The web service is exposed only on:
-
-```text
-127.0.0.1:8765
-```
-
-rather than all LAN interfaces.
-
-The repository does not source-control local telemetry. `.gitignore`, `.dockerignore` and the GitHub Actions safety job exclude or check for:
-
-- `data/`
-- Codex JSONL/session data
-- SQLite/database files
-- environment files
-- API keys / common credentials
-- private keys
-- user-specific local paths
-
-## Local data
-
-Runtime data is written beneath the gitignored `data/` folder:
-
-```text
-data/
-  codex_usage.sqlite
-  codex_usage_records.csv
-  codex_turns.csv
-  codex_activity.csv
-  codex_rate_limits.csv
-  codex_usage_daily.csv
-  codex_agents.csv
-  codex_skills.csv
-  codex_usage_metadata.json
-  api_pricing.json
-```
-
-SQLite is the dashboard source of truth. CSVs are retained for inspection/export.
-
-## Dashboard filtering
-
-The dashboard supports:
-
-- date range
-- 7 / 30 / 60 / 90-day shortcuts
+- date range and 7 / 30 / 60 / 90 day shortcuts
+- source
+- billing mode
+- provider
+- account / subscription
+- agent
 - model
-- agent / role
 - reasoning effort
 - project
+- target model on the Workload estimator tab
 
-Filters are sent to the local API and applied in SQLite. The browser does not need to download all raw response records to change a filter.
+Filters compose server-side in SQLite.
 
-The main views are separated into tabs so changing a filter only runs the SQL needed for the active view:
+## Dashboard views
 
-- Token usage
-- Subscription value
-- Useful insights
-- Activity over time
-- Highest-usage sessions
+### AI usage
 
-The sessions endpoint is deliberately limited to the top 100 sessions by total token usage for the selected filters; the returned set remains sortable in the browser.
+Unified workload by provider, billing mode, account/subscription, agent, model, source and day. Runs without token counters still contribute to run metrics.
 
-## API-equivalent token cost
+### Subscription value
 
-The dashboard calculates a **counterfactual Standard OpenAI API token cost in USD** for the selected usage.
+Separates reported provider charge from the counterfactual API-equivalent estimate. It also shows subscription/API/local/unknown run counts, account/agent/provider/billing breakdowns, agent compute time, active wall-clock time, parallelism, and API-equivalent cost per compute/active hour.
 
-It uses the token categories persisted by Codex:
+An agent compute-hour is machine/agent processing time, not a claim of equivalent human developer labour.
 
-```text
-ordinary input
-cached input
-cache-write input
-output
-```
+### Workload estimator
 
-and the locally stored current API rate card, including documented long-context rates where applicable.
+Select an agent, historical period and target model. The estimator shows runs, runs/day, token coverage, fresh/cached/output workload, average/P95/peak measured-run tokens, runtime distribution, current API-equivalent estimate and target-model API-equivalent estimate where a configured price exists.
 
-The **Subscription value** tab shows the exact per-million-token prices being used. **Check latest prices** fetches the public OpenAI API pricing page, updates the local `data/api_pricing.json` rate card, clears the server query cache, and reprices the existing historical telemetry without recollecting Codex sessions. If that request fails, the previously stored local rates remain in use.
+It is a workload replay, not a model-quality or behaviour forecast. A different model may tokenize, cache, reason, call tools and produce output differently.
 
-This is intended as a subscription-value comparison rather than an invoice. It does not include separately priced API services such as web search, containers, storage, regional processing or other non-token charges.
+### Activity & tools
 
-The dashboard also keeps the separate Codex/Business credit-equivalent estimate.
+Provider-agnostic runtime/model activity plus Codex-specific skills and MCP integration/tool calls.
 
-The dashboard intentionally does **not** surface the old generic "tool calls" count. The rollout parser classifies shell/function/custom/MCP calls as activity, but combining these into one headline number mixes unlike operations and was not analytically useful. Skill invocation detection is retained, and configured skills beneath `~/.codex/skills` are inventoried so unused skills can be shown alongside used ones.
+### Codex diagnostics
 
-Codex rollouts also do not expose a reliable "lines of code generated" metric. Explicit patch diffs can sometimes be counted, but shell/file-write paths are not consistently attributable. The dashboard therefore omits the old patch-lines chart rather than presenting an incomplete number. A trustworthy LOC metric would need repository/Git diff correlation.
+Retains Codex-specific context, compaction, latency, failure and rate-limit telemetry.
+
+### Runs
+
+Normalized run-level source, agent, account, provider, model, duration, token availability, reported provider charge, API-equivalent estimate and status.
+
+## Pricing and cost semantics
+
+The current OpenAI API rate card remains in `data/api_pricing.json`. **Check latest OpenAI prices** refreshes supported Standard API token prices and reprices historical normalized workload without recollecting sessions.
+
+Unsupported providers/models remain unpriced rather than receiving invented rates.
+
+Reported provider cost and API-equivalent estimated cost are separate values. Local billing has no provider/API charge but is not described as zero total economic cost.
+
+## Subscription quota limitation
+
+Historical token counts are workload measurements; they are **not** a conversion into ChatGPT/Codex subscription allowance.
+
+The current Paperclip quota-window endpoint reports provider-level windows and does not expose the AI connection/account id needed to distinguish separate Codex subscriptions. The dashboard can therefore show provider-level quota windows but deliberately does not attribute one of those windows to an individual subscription.
+
+The normalized quota table already has an account-connection field so account-specific quota can be added later if Paperclip exposes reliable connection attribution.
 
 ## Historical Codex telemetry
 
-The collector supports both:
+Newer Codex usage comes from per-response `token_usage_record` events. Older `event_msg -> token_count` telemetry is recovered from `info.last_token_usage`, while cumulative totals are used only as a change detector. This prevents inherited parent history in forked/subagent rollouts from being counted as a huge new request and preserves requests across cumulative-counter resets.
 
-- newer per-response `token_usage_record` events
-- older cumulative `event_msg -> token_count -> info.total_token_usage` events
+Copied historical turn lifecycles are de-duplicated only when turn id, start, completion and duration prove they are the same lifecycle. Generic old turn ids are not globally collapsed.
 
-For older rollouts, request usage is recovered from positive changes in cumulative totals. This avoids double-counting repeated `last_token_usage` snapshots.
+## Privacy and security
 
-The terminal/debug metadata distinguishes the requested refresh window from dates where recoverable token data was actually observed.
+Docker mounts:
 
-## CLI collector
+```text
+%USERPROFILE%/.codex  -> /codex     read-only
+./data                -> /app/data  read/write
+```
 
-The collector can still be run directly for troubleshooting or exports, although normal use should now happen through the dashboard.
+Paperclip access is HTTP GET/read-only. The integration does not modify agents, tasks, AI connections, subscriptions, runtime configuration or settings.
 
-Examples:
+Never commit `.env`, raw rollout JSONL, SQLite/database files, tokens, auth files or validation packs. The repository safety workflow checks tracked files for telemetry and common credential patterns.
+
+## Local data
+
+SQLite remains the dashboard source of truth at `data/codex_usage.sqlite`. It contains both the retained Codex-specific tables and normalized tables:
+
+```text
+usage_records
+usage_runs
+usage_accounts
+source_status
+provider_quotas
+```
+
+## CLI collectors
+
+Normal use should happen through the dashboard. Troubleshooting examples:
 
 ```powershell
 py .\collect_codex_usage.py --days 7
-
+py .\collect_paperclip_usage.py --days 7
 py .\collect_codex_usage.py --from-date 2026-07-01 --to-date 2026-09-23 --scan-all
 ```
-
-The legacy `run-usage-report.cmd` wrapper is retained for troubleshooting compatibility.
 
 ## Development checks
 
 GitHub Actions verifies:
 
-- Python syntax
-- collector CLI startup
-- collector smoke run
-- legacy `token_count` telemetry regression
-- tab-specific SQLite query integration
-- local API server startup and health endpoint
+- Python syntax for both collectors, normalized model and server
+- Codex collector CLI/smoke run
+- legacy token-count inherited-history/reset behavior
+- Codex skill and typed MCP parsing
+- Paperclip shared-subscription/account switching/local/API/missing-token/unknown-account/idempotency/outage fixtures
+- normalized SQLite dashboard queries and workload estimator
+- local API startup and health
 - dashboard JavaScript syntax
 - Docker image build
 - Windows CLI wrapper
 - sensitive-data / telemetry repository safety
+
+## Known limitations
+
+- Paperclip's heartbeat-run list currently caps a request at 1,000 runs. The collector queries per agent and surfaces a warning when an agent reaches that limit; pagination support would remove this gap.
+- Actual provider cost is available only when the source reports it.
+- Non-OpenAI API-equivalent prices are not invented; provider price cards can be added later.
+- Current Paperclip quota windows are provider-scoped, not connection/account-scoped.
+- Codex-specific skills/MCP/context diagnostics do not automatically exist for other runtimes.
+- No electricity/hardware cost is estimated for local inference.
