@@ -254,9 +254,13 @@ def normalized_where(
         "project": "project_name",
     }
     for key, column in mapping.items():
-        if filters.get(key):
-            clauses.append(f"{p}{column}=?")
-            values.append(filters[key])
+        if not filters.get(key):
+            continue
+        if key == "account" and filters[key] == "__unknown__":
+            clauses.append(f"COALESCE({p}{column},'')=''")
+            continue
+        clauses.append(f"{p}{column}=?")
+        values.append(filters[key])
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
