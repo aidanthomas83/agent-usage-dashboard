@@ -49,9 +49,11 @@ class PaperclipClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            body = exc.read(2048).decode("utf-8", errors="replace")
+            # Do not persist or log Paperclip error bodies: authentication and
+            # vault-backed deployments may include details that do not belong
+            # in analytics logs.
             raise PaperclipApiError(
-                f"Paperclip HTTP {exc.code} for {path}: {body[:300]}"
+                f"Paperclip HTTP {exc.code} for {path}"
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise PaperclipApiError(f"Paperclip request failed for {path}: {exc}") from exc
