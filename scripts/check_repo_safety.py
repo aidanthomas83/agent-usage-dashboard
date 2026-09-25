@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN_PREFIXES = ("data/","preview-data/","test-output/",".codex/")
 FORBIDDEN_GLOBS = ("*.jsonl","*.sqlite","*.sqlite3","*.db","*.db-wal","*.db-shm",".env",".env.*","*.pem","*.key","*.pfx","*.p12")
+ALLOWED_SENSITIVE_FILENAMES = {".env.example"}
 SECRET_PATTERNS = {
     "OpenAI API key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     "GitHub classic PAT": re.compile(r"\bghp_[A-Za-z0-9]{30,}\b"),
@@ -33,7 +34,7 @@ def main():
         rel=path.relative_to(ROOT).as_posix(); low=rel.lower()
         if any(low.startswith(p) for p in FORBIDDEN_PREFIXES):
             failures.append(f"forbidden generated/local path: {rel}"); continue
-        if any(fnmatch.fnmatch(low,p.lower()) for p in FORBIDDEN_GLOBS):
+        if low not in ALLOWED_SENSITIVE_FILENAMES and any(fnmatch.fnmatch(low,p.lower()) for p in FORBIDDEN_GLOBS):
             failures.append(f"forbidden sensitive file type: {rel}"); continue
         try: raw=path.read_bytes()
         except OSError as exc:
