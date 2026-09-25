@@ -5,11 +5,18 @@ services:
     container_name: agent-usage-dashboard
     ports:
       - "127.0.0.1:8765:8765"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       CODEX_HOME: /codex
       DATA_DIR: /app/data
       DASHBOARD_PORT: "8765"
       TZ: ${TZ:-Australia/Brisbane}
+      PAPERCLIP_ENABLED: ${PAPERCLIP_ENABLED:-true}
+      PAPERCLIP_BASE_URL: ${PAPERCLIP_BASE_URL:-http://host.docker.internal:3100}
+      PAPERCLIP_COMPANY_ID: ${PAPERCLIP_COMPANY_ID:-}
+      PAPERCLIP_API_TOKEN: ${PAPERCLIP_API_TOKEN:-}
+      PAPERCLIP_TIMEOUT_SECONDS: ${PAPERCLIP_TIMEOUT_SECONDS:-10}
     volumes:
       - type: bind
         source: ${USERPROFILE}/.codex
