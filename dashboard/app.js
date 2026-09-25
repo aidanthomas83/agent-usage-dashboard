@@ -404,44 +404,69 @@ function renderSubscription(data){
   const s=data.summary||{},pricing=data.pricing||{},cost=n(s.api_cost),viewDays=selectedCalendarDays(),avgDaily=viewDays?cost/viewDays:0;
   const rs=data.runtime_summary||{},runtimeAgents=data.runtime_agents||[];
   return`
-    <div class="tab-title"><div><h2>Subscription value · API-equivalent token cost</h2><p>What the selected recorded token traffic would cost using the active Standard OpenAI API rate card.</p></div></div>
+    <div class="tab-title"><div><h2>Subscription value · provider charge and API-equivalent workload</h2><p>Separate what providers actually reported from the counterfactual API cost of the same recorded workload.</p></div></div>
+    ${sourceStatusPanel()}
     <div class="kpis subscription-kpis">
-      ${kpi('API-equivalent cost',fmtUsd(cost),`${pct(s.api_coverage_pct)} pricing coverage`,'var(--green)',n(s.api_coverage_pct)<95)}
-      ${kpi('Average daily cost',fmtUsd(avgDaily),`${viewDays} calendar day${viewDays===1?'':'s'} in viewed range`,'#b8c0ca')}
-      ${kpi('Estimated Codex credits',fmtCredits(s.estimated_credits),`${pct(s.credit_coverage_pct)} credit-rate coverage`,'var(--teal)',n(s.credit_coverage_pct)<95)}
-      ${kpi('Priced token volume',fmt(s.api_priced_tokens),`${fmt(s.total_tokens)} total tokens`,'var(--blue)')}
-      ${kpi('Unpriced token volume',fmt(n(s.total_tokens)-n(s.api_priced_tokens)),n(s.api_coverage_pct)<100?'Excluded from cost rather than guessed':'Full pricing coverage','var(--amber)')}
-      ${kpi('Long-context responses',fmtExact(s.long_context_responses),`>${fmt(pricing.long_context_threshold||272000)} input tokens`,'var(--purple)')}
+      ${kpi('API-equivalent estimate',fmtUsd(cost),`${pct(s.api_coverage_pct)} token pricing coverage`,'var(--green)',n(s.api_coverage_pct)<80)}
+      ${kpi('Average daily estimate',fmtUsd(avgDaily),`${viewDays} calendar day${viewDays===1?'':'s'} in viewed range`,'#b8c0ca')}
+      ${kpi('Reported provider charge',fmtUsd(s.actual_provider_cost),`${pct(s.actual_cost_coverage_pct)} run coverage`,'var(--purple)')}
+      ${kpi('Subscription runs',fmtExact(s.subscription_runs),'Historical workload only · not quota remaining','var(--blue)')}
+      ${kpi('API runs',fmtExact(s.api_runs),'Metered/API-key attributed runs','var(--orange)')}
+      ${kpi('Local runs',fmtExact(s.local_runs),'No provider charge · local costs not estimated','var(--green)')}
+      ${kpi('Unknown billing',fmtExact(s.unknown_runs),'Kept visible rather than guessed','var(--amber)',n(s.unknown_runs)>0)}
+      ${kpi('Priced token volume',fmt(s.priced_tokens),`${fmt(s.total_tokens)} total tokens`,'var(--teal)',n(s.api_coverage_pct)<80)}
     </div>
+
     <div class="section-kicker mt">Runtime value</div>
     <div class="kpis runtime-kpis subscription-runtime-kpis">
-      ${kpi('Agent compute time',fmtDuration(rs.agent_compute_ms),'Sum of agent turn durations · comparable to machine work-hours, not human effort','var(--blue)')}
-      ${kpi('Active wall-clock time',fmtDuration(rs.active_wall_ms),'Elapsed time with at least one agent running','#9aa4b2')}
+      ${kpi('Agent compute time',fmtDuration(rs.agent_compute_ms),'Sum of recorded agent/run durations · not human developer-hours','var(--blue)')}
+      ${kpi('Active wall-clock time',fmtDuration(rs.active_wall_ms),'Overlapping runs counted once','#9aa4b2')}
       ${kpi('Parallelism',n(rs.parallelism_factor).toFixed(2)+'×','Compute time ÷ active wall-clock time','var(--purple)')}
-      ${kpi('Cost / agent-hour',fmtUsd(rs.cost_per_agent_hour),'API-equivalent cost ÷ cumulative agent compute hours','var(--green)')}
-      ${kpi('Cost / active hour',fmtUsd(rs.cost_per_active_hour),'API-equivalent cost ÷ active wall-clock hours','var(--teal)')}
-      ${kpi('Runtime coverage',pct(rs.duration_coverage_pct),`${pct(rs.interval_coverage_pct)} with start/end timestamps`,'var(--orange)',n(rs.duration_coverage_pct)<95)}
+      ${kpi('Cost / agent-hour',fmtUsd(rs.cost_per_agent_hour),'API-equivalent estimate ÷ recorded compute hours','var(--green)')}
+      ${kpi('Cost / active hour',fmtUsd(rs.cost_per_active_hour),'API-equivalent estimate ÷ active wall-clock hours','var(--teal)')}
+      ${kpi('Runtime coverage',pct(rs.duration_coverage_pct),`${pct(rs.interval_coverage_pct)} with start/end timestamps`,'var(--orange)',n(rs.duration_coverage_pct)<80)}
     </div>
-    <div class="panel full-panel"><h3>API-equivalent cost by day</h3><div class="desc">Full-width daily cost by model. Hover any day for the model split.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[],'api_cost','usd',{average:avgDaily,averageLabel:'Average daily cost'})}</div></div>
+
+    <div class="panel full-panel"><h3>API-equivalent cost by day</h3><div class="desc">Reprices recorded token workload against the locally stored Standard OpenAI API rate card where a model is supported. Hover for model detail.</div><div class="chart chart-large">${stackedDaily(data.daily_models||[],'api_cost','usd',{average:avgDaily,averageLabel:'Average daily estimate'})}</div></div>
+
     <div class="grid-2 equal mt">
-      <div class="panel"><h3>Cost by model</h3><div class="desc">Current-rate token cost by model.</div>${hbars((data.models||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,modelColor,fmtUsd,14)}</div>
-      <div class="panel"><h3>Cost by agent</h3><div class="desc">Current-rate token cost attributed to each recorded agent role.</div>${hbars((data.agents||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,agentColor,fmtUsd,14)}</div>
+      <div class="panel"><h3>Value by account / subscription</h3><div class="desc">API-equivalent estimate by the account that actually handled each run.</div>${hbars((data.accounts||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,accountColor,fmtUsd,16)}</div>
+      <div class="panel"><h3>Value by agent</h3><div class="desc">API-equivalent workload attributed to each agent.</div>${hbars((data.agents||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,agentColor,fmtUsd,16)}</div>
     </div>
+    <div class="grid-2 equal mt">
+      <div class="panel"><h3>Value by provider</h3><div class="desc">Only models present on the active API price card contribute to the estimate.</div>${hbars((data.providers||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,providerColor,fmtUsd,12)}</div>
+      <div class="panel"><h3>Value by billing mode</h3><div class="desc">Subscription workload remains separate from API, local and unknown billing.</div>${hbars((data.billing_modes||[]).map(x=>({...x,total_tokens:x.api_cost})),cost,billingColor,fmtUsd,8)}</div>
+    </div>
+
     <div class="panel full-panel mt">
       <h3>Runtime and cost by agent</h3>
-      <div class="desc">Compute time adds concurrent turns; active wall time merges overlap within each role. This makes agent processing hours visible alongside the equivalent API spend without treating an agent-hour as equal to a human developer-hour.</div>
+      <div class="desc">Compute time is machine/agent processing time. It is useful for workload comparison, but it is not claimed to equal a human developer-hour.</div>
       ${runtimeAgentTable(runtimeAgents)}
     </div>
+
+    <div class="panel full-panel mt">
+      <h3>Account → agent → model</h3>
+      <div class="desc">Run-level connection attribution lets an agent move between subscriptions over time without rewriting historical ownership.</div>
+      ${accountDrilldownTable(data.account_drilldown||[])}
+    </div>
+
+    <div class="panel full-panel mt">
+      <h3>Provider quota windows</h3>
+      <div class="desc">Quota is kept separate from token workload. The current Paperclip API reports these at provider scope rather than connection/account scope.</div>
+      ${quotaPanel(data.provider_quotas||[],data.quota_note)}
+    </div>
+
+    <div class="note mt">${esc(data.actual_cost_note||'')}</div>
+
     <div class="panel mt">
       <div class="pricing-head">
-        <div><h3>API prices used in this calculation</h3><div class="desc">USD per 1M tokens. Prices are stored locally so historical usage can be repriced without recollecting Codex sessions.</div></div>
-        <div class="pricing-actions"><button id="refreshPricingBtn" class="primary-btn" type="button">Check latest prices</button></div>
+        <div><h3>API prices used for estimates</h3><div class="desc">USD per 1M tokens. Unsupported providers/models are excluded from estimates rather than assigned invented prices.</div></div>
+        <div class="pricing-actions"><button id="refreshPricingBtn" class="primary-btn" type="button">Check latest OpenAI prices</button></div>
       </div>
       ${pricingMessage?`<div class="note">${esc(pricingMessage)}</div>`:''}
       ${pricingTable(pricing)}
-      <div class="formula mt">ordinary input = input − cached input − cache-write input
-API-equivalent cost = ordinary input × input rate + cached input × cached rate + cache writes × cache-write rate + output × output rate</div>
-      <div class="pricing-source">Rate card: <b>${esc(pricing.as_of||'embedded')}</b>${pricing.retrieved_at?` · fetched ${esc(fmtDate(pricing.retrieved_at,true))}`:''} · <a href="${escAttr(pricing.source_url||'#')}" target="_blank" rel="noreferrer">OpenAI API pricing source</a>. Long-context rates apply per the published model table when present.</div>
+      <div class="formula mt">API-equivalent estimate = ordinary input × input rate + cached input × cached rate + cache writes × cache-write rate + output × output rate</div>
+      <div class="pricing-source">Rate card: <b>${esc(pricing.as_of||'embedded')}</b>${pricing.retrieved_at?` · fetched ${esc(fmtDate(pricing.retrieved_at,true))}`:''} · <a href="${escAttr(pricing.source_url||'#')}" target="_blank" rel="noreferrer">OpenAI API pricing source</a>. These estimates are not subscription quota conversion.</div>
     </div>
   `;
 }
