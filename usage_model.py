@@ -176,7 +176,7 @@ def _codex_agent(row: sqlite3.Row | dict[str, Any]) -> tuple[str, str, str]:
     if kind == "Main":
         return "codex:main", "Main", "Main"
     role = str(row["agent_role"] or row["agent_label"] or "Subagent")
-    return f"codex:role:{_slug(role)}", role, role
+    return f"codex:role:{role}", role, role
 
 
 def _insert_rows(
