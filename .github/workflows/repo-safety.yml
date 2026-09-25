@@ -16,9 +16,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check Python syntax
-        run: python -m py_compile collect_codex_usage.py server.py scripts/check_repo_safety.py
-      - name: Check collector CLI
-        run: python collect_codex_usage.py --help > /dev/null
+        run: python -m py_compile collect_codex_usage.py collect_paperclip_usage.py usage_model.py server.py scripts/check_repo_safety.py scripts/check_paperclip_usage.py
+      - name: Check collector CLIs
+        run: |
+          python collect_codex_usage.py --help > /dev/null
+          python collect_paperclip_usage.py --help > /dev/null
       - name: Smoke-test collector
         run: |
           mkdir -p /tmp/codex-empty
@@ -27,6 +29,8 @@ jobs:
         run: python scripts/check_legacy_token_count.py
       - name: Test Codex skill activity detection
         run: python scripts/check_skill_activity.py
+      - name: Test Paperclip usage normalization
+        run: python scripts/check_paperclip_usage.py
       - name: Test tab-specific SQLite queries
         run: python scripts/check_server_queries.py
       - name: Smoke-test local API server
