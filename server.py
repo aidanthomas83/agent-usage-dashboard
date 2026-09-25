@@ -850,25 +850,163 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
     if conn is None:
         return {
             "ready": False, "data_min": None, "data_max": None,
+            "sources": [], "billing_modes": [], "providers": [], "accounts": [],
             "models": [], "agents": [], "efforts": [], "projects": [],
+            "target_models": [], "source_status": [],
             "metadata": {}, "refresh": refresh_status(),
         }
     try:
         metadata = decode_metadata(conn)
-        minmax = conn.execute("SELECT MIN(date),MAX(date),COUNT(*) FROM responses").fetchone()
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        normalized = "usage_runs" in tables and "usage_records" in tables
 
         def distinct(sql: str) -> list[str]:
-            return [str(r[0]) for r in conn.execute(sql).fetchall() if r[0] not in (None, "")]
+            return [
+                str(row[0])
+                for row in conn.execute(sql).fetchall()
+                if row[0] not in (None, "")
+            ]
 
+        if normalized:
+            minmax = conn.execute(
+                """SELECT MIN(date),MAX(date),COUNT(*) FROM (
+                       SELECT date FROM usage_runs
+                       UNION ALL
+                       SELECT date FROM usage_records
+                   )"""
+            ).fetchone()
+            sources = [
+                {"id": value, "name": source_label(value)}
+                for value in distinct(
+                    "SELECT DISTINCT source_system FROM usage_runs WHERE source_system<>'' ORDER BY source_system"
+                )
+            ]
+            billings = distinct(
+                "SELECT DISTINCT billing_mode FROM usage_runs WHERE billing_mode<>'' ORDER BY billing_mode"
+            )
+            providers = distinct(
+                "SELECT DISTINCT provider FROM usage_runs WHERE provider<>'' ORDER BY provider"
+            )
+            models = distinct(
+                """SELECT DISTINCT model FROM (
+                       SELECT model FROM usage_records
+                       UNION SELECT model FROM usage_runs
+                   ) WHERE model<>'' ORDER BY model"""
+            )
+            agents = [
+                {"id": str(row[0]), "name": str(row[1] or row[0])}
+                for row in conn.execute(
+                    """SELECT agent_id,MAX(agent_name) name
+                         FROM usage_runs
+                        WHERE agent_id<>''
+                        GROUP BY agent_id
+                        ORDER BY lower(name),agent_id"""
+                ).fetchall()
+            ]
+            accounts = [
+                {
+                    "id": str(row[0]),
+                    "name": str(row[1] or row[0]),
+                    "provider": str(row[2] or "unknown"),
+                    "billing_mode": str(row[3] or "unknown"),
+                }
+                for row in conn.execute(
+                    """SELECT connection_id,display_name,provider,billing_mode
+                         FROM usage_accounts
+                        WHERE connection_id<>''
+                        ORDER BY lower(display_name),connection_id"""
+                ).fetchall()
+            ]
+            unknown_accounts = conn.execute(
+                "SELECT COUNT(*) FROM usage_runs WHERE COALESCE(account_connection_id,'')=''"
+            ).fetchone()[0]
+            if unknown_accounts:
+                accounts.append({
+                    "id": "__unknown__", "name": "Unknown account",
+                    "provider": "unknown", "billing_mode": "unknown",
+                })
+            efforts = distinct(
+                "SELECT DISTINCT reasoning_effort FROM usage_records WHERE reasoning_effort<>'' ORDER BY reasoning_effort"
+            )
+            projects = distinct(
+                """SELECT DISTINCT project_name FROM usage_runs
+                    WHERE project_name<>'' ORDER BY project_name"""
+            )
+            source_status = []
+            if "source_status" in tables:
+                for row in conn.execute(
+                    """SELECT source_system,status,message,last_attempt_at,last_success_at,
+                              company_id,records_upserted,details_json
+                         FROM source_status ORDER BY source_system"""
+                ).fetchall():
+                    try:
+                        details = json.loads(row[7] or "{}")
+                    except json.JSONDecodeError:
+                        details = {}
+                    source_status.append({
+                        "source_system": row[0],
+                        "name": source_label(str(row[0] or "")),
+                        "status": row[1],
+                        "message": row[2],
+                        "last_attempt_at": row[3],
+                        "last_success_at": row[4],
+                        "company_id": row[5],
+                        "records_upserted": int(row[6] or 0),
+                        "details": details if isinstance(details, dict) else {},
+                    })
+            pricing = load_pricing(data_dir)
+            target_models = sorted(
+                str(model)
+                for model in (pricing.get("models") or {}).keys()
+            )
+            return {
+                "ready": bool(minmax and minmax[2]),
+                "data_min": minmax[0] if minmax else None,
+                "data_max": minmax[1] if minmax else None,
+                "responses": int(minmax[2] or 0) if minmax else 0,
+                "sources": sources,
+                "billing_modes": billings,
+                "providers": providers,
+                "accounts": accounts,
+                "models": models,
+                "agents": agents,
+                "efforts": efforts,
+                "projects": projects,
+                "target_models": target_models,
+                "source_status": source_status,
+                "metadata": metadata,
+                "refresh": refresh_status(),
+            }
+
+        # Upgrade fallback while the normalized projection is being bootstrapped.
+        minmax = conn.execute("SELECT MIN(date),MAX(date),COUNT(*) FROM responses").fetchone()
+        codex_agents = distinct(
+            f"SELECT DISTINCT {agent_expr()} AS role FROM responses ORDER BY role"
+        )
         return {
             "ready": bool(minmax and minmax[2]),
             "data_min": minmax[0] if minmax else None,
             "data_max": minmax[1] if minmax else None,
             "responses": int(minmax[2] or 0) if minmax else 0,
+            "sources": [{"id": usage_model.SOURCE_CODEX, "name": "Codex Desktop"}],
+            "billing_modes": ["subscription"],
+            "providers": ["openai"],
+            "accounts": [{"id": "codex-desktop", "name": "Codex Desktop", "provider": "openai", "billing_mode": "subscription"}],
             "models": distinct("SELECT DISTINCT model FROM responses WHERE model<>'' ORDER BY model"),
-            "agents": distinct(f"SELECT DISTINCT {agent_expr()} AS role FROM responses ORDER BY role"),
+            "agents": [
+                {
+                    "id": "codex:main" if role == "Main" else f"codex:role:{role}",
+                    "name": role,
+                }
+                for role in codex_agents
+            ],
             "efforts": distinct("SELECT DISTINCT reasoning_effort FROM responses WHERE reasoning_effort<>'' ORDER BY reasoning_effort"),
             "projects": distinct("SELECT DISTINCT project FROM responses WHERE project<>'' ORDER BY project"),
+            "target_models": sorted(str(model) for model in (load_pricing(data_dir).get("models") or {}).keys()),
+            "source_status": [],
             "metadata": metadata,
             "refresh": refresh_status(),
         }
