@@ -421,6 +421,49 @@ def normalized_runtime_breakdown(
         agents.append(bucket)
     agents.sort(key=lambda row: int(row.get("agent_compute_ms") or 0), reverse=True)
 
+    by_date: dict[str, list[dict[str, object]]] = {}
+    by_agent_date: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        day = str(row.get("date") or "")
+        by_date.setdefault(day, []).append(row)
+        key = (day, str(row.get("agent_name") or "Unknown agent"))
+        bucket = by_agent_date.setdefault(key, {
+            "date": day,
+            "name": key[1],
+            "duration_ms": 0,
+            "turns": 0,
+        })
+        bucket["duration_ms"] = int(bucket["duration_ms"]) + int(row.get("duration_ms") or 0)
+        bucket["turns"] = int(bucket["turns"]) + 1
+
+    cost_by_date = {
+        str(row.get("date") or ""): float(row.get("api_cost") or 0)
+        for row in normalized_pricing_groups(
+            conn, filters, [("date", "r.date")], pricing
+        )
+    }
+    daily: list[dict[str, object]] = []
+    for day in sorted(by_date):
+        day_rows = by_date[day]
+        day_compute = sum(int(row.get("duration_ms") or 0) for row in day_rows)
+        day_active = merged_normalized_interval_ms(day_rows)
+        day_cost = cost_by_date.get(day, 0.0)
+        daily.append({
+            "date": day,
+            "agent_compute_ms": day_compute,
+            "active_wall_ms": day_active,
+            "api_cost": day_cost,
+            "cost_per_agent_hour": day_cost / (day_compute / 3_600_000.0) if day_compute else 0.0,
+            "cost_per_active_hour": day_cost / (day_active / 3_600_000.0) if day_active else 0.0,
+            "parallelism_factor": day_compute / day_active if day_active else 0.0,
+        })
+
+    run_count = int(actual[2] or 0)
+    duration_covered = sum(1 for row in rows if int(row.get("duration_ms") or 0) > 0)
+    interval_covered = sum(
+        1 for row in rows
+        if str(row.get("started_utc") or "") and str(row.get("finished_utc") or "")
+    )
     return {
         "summary": {
             "agent_compute_ms": compute_ms,
@@ -429,11 +472,15 @@ def normalized_runtime_breakdown(
             "estimated_api_cost": estimated,
             "actual_provider_cost": float(actual[0] or 0),
             "actual_cost_runs": int(actual[1] or 0),
-            "runs": int(actual[2] or 0),
+            "runs": run_count,
+            "duration_coverage_pct": duration_covered / run_count * 100.0 if run_count else 0.0,
+            "interval_coverage_pct": interval_covered / run_count * 100.0 if run_count else 0.0,
             "cost_per_agent_hour": estimated / (compute_ms / 3_600_000.0) if compute_ms else 0.0,
             "cost_per_active_hour": estimated / (active_ms / 3_600_000.0) if active_ms else 0.0,
         },
         "agents": agents,
+        "daily": daily,
+        "by_agent_daily": list(by_agent_date.values()),
     }
 
 
