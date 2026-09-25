@@ -1145,66 +1145,170 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
         if conn is None:
             return {"ready": False, "tab": "subscription"}
         try:
-            total_groups = price_group_rows(pricing_groups(conn, filters, [], pricing), [], pricing)
-            total_row = total_groups[0] if total_groups else {"api_cost": 0.0, "total_tokens": 0, "priced_tokens": 0}
-            total_tokens = int(total_row.get("total_tokens") or 0)
-            summary = {
-                "api_cost": float(total_row.get("api_cost") or 0),
-                "total_tokens": total_tokens,
-                "api_priced_tokens": int(total_row.get("priced_tokens") or 0),
-                "api_coverage_pct": (int(total_row.get("priced_tokens") or 0) / total_tokens * 100.0) if total_tokens else 0.0,
-            }
-            where, values = where_for(filters)
-            credit_row = conn.execute(
-                f"""SELECT COALESCE(SUM(estimated_credits),0) estimated_credits,
-                           COALESCE(SUM(CASE WHEN credit_rate_status LIKE 'priced%' THEN total_tokens ELSE 0 END),0) credit_priced_tokens
-                      FROM responses{where}""",
-                values,
+            record_where, record_values = normalized_where(filters, "r")
+            run_where, run_values = normalized_where(filters, "u")
+            token_row = conn.execute(
+                f"""SELECT COALESCE(SUM(r.total_tokens),0) total_tokens,
+                           COUNT(*) usage_records
+                      FROM usage_records r{record_where}""",
+                record_values,
             ).fetchone()
-            summary["estimated_credits"] = float(credit_row["estimated_credits"] or 0)
-            summary["credit_priced_tokens"] = int(credit_row["credit_priced_tokens"] or 0)
-            summary["credit_coverage_pct"] = (summary["credit_priced_tokens"] / total_tokens * 100.0) if total_tokens else 0.0
-            long_count = conn.execute(
-                f"SELECT COUNT(*) FROM responses{where} {'AND' if where else 'WHERE'} input_tokens>?",
-                [*values, int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)],
-            ).fetchone()[0]
-            summary["long_context_responses"] = int(long_count or 0)
+            run_row = conn.execute(
+                f"""SELECT COUNT(*) runs,
+                           SUM(CASE WHEN u.billing_mode='subscription' THEN 1 ELSE 0 END) subscription_runs,
+                           SUM(CASE WHEN u.billing_mode='api' THEN 1 ELSE 0 END) api_runs,
+                           SUM(CASE WHEN u.billing_mode='local' THEN 1 ELSE 0 END) local_runs,
+                           SUM(CASE WHEN u.billing_mode='unknown' THEN 1 ELSE 0 END) unknown_runs,
+                           COALESCE(SUM(CASE WHEN u.actual_cost_available=1 THEN u.actual_provider_cost_usd ELSE 0 END),0) actual_provider_cost,
+                           SUM(CASE WHEN u.actual_cost_available=1 THEN 1 ELSE 0 END) actual_cost_runs
+                      FROM usage_runs u{run_where}""",
+                run_values,
+            ).fetchone()
+            total_tokens = int(token_row["total_tokens"] or 0)
+            cost_rows = normalized_pricing_groups(conn, filters, [], pricing)
+            api_cost_total = sum(float(row.get("api_cost") or 0) for row in cost_rows)
+            priced_tokens = sum(int(row.get("priced_tokens") or 0) for row in cost_rows)
+            summary = {
+                "api_cost": api_cost_total,
+                "total_tokens": total_tokens,
+                "priced_tokens": priced_tokens,
+                "api_coverage_pct": priced_tokens / total_tokens * 100.0 if total_tokens else 0.0,
+                "actual_provider_cost": float(run_row["actual_provider_cost"] or 0),
+                "actual_cost_runs": int(run_row["actual_cost_runs"] or 0),
+                "runs": int(run_row["runs"] or 0),
+                "subscription_runs": int(run_row["subscription_runs"] or 0),
+                "api_runs": int(run_row["api_runs"] or 0),
+                "local_runs": int(run_row["local_runs"] or 0),
+                "unknown_runs": int(run_row["unknown_runs"] or 0),
+            }
+            summary["actual_cost_coverage_pct"] = (
+                summary["actual_cost_runs"] / summary["runs"] * 100.0
+                if summary["runs"] else 0.0
+            )
 
-            model_rows = price_group_rows(
-                pricing_groups(conn, filters, [("name", "COALESCE(NULLIF(model,''),'Unknown')")], pricing),
-                ["name"], pricing,
-            )
-            agent_rows = price_group_rows(
-                pricing_groups(conn, filters, [("name", agent_expr())], pricing),
-                ["name"], pricing,
-            )
-            daily_rows = price_group_rows(
-                pricing_groups(conn, filters, [("date", "date"), ("model_name", "COALESCE(NULLIF(model,''),'Unknown')")], pricing),
-                ["date", "model_name"], pricing,
+            daily_rows = normalized_pricing_groups(
+                conn, filters,
+                [("date", "r.date"), ("model_name", "COALESCE(NULLIF(r.model,''),'Unknown')")],
+                pricing,
             )
             daily_models = [
-                {"date": r["date"], "model": r["model_name"], "api_cost": r["api_cost"], "total_tokens": r["total_tokens"]}
-                for r in daily_rows
+                {
+                    "date": row["date"],
+                    "model": row["model_name"],
+                    "api_cost": row["api_cost"],
+                    "total_tokens": row["total_tokens"],
+                }
+                for row in daily_rows
             ]
-            runtime = runtime_breakdown(conn, filters, pricing)
 
-            used_models = {str(r["name"]) for r in model_rows}
+            model_rows = normalized_pricing_groups(
+                conn, filters,
+                [("name", "COALESCE(NULLIF(r.model,''),'Unknown')")],
+                pricing,
+            )
+            agent_cost_rows = normalized_pricing_groups(
+                conn, filters,
+                [
+                    ("id", "COALESCE(NULLIF(r.agent_id,''),'unknown')"),
+                    ("name", "COALESCE(NULLIF(r.agent_name,''),'Unknown agent')"),
+                ],
+                pricing,
+            )
+            account_cost_rows = normalized_pricing_groups(
+                conn, filters,
+                [
+                    ("id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')"),
+                    ("name", "COALESCE(NULLIF(r.account_display_name,''),'Unknown account')"),
+                ],
+                pricing,
+            )
+            provider_cost_rows = normalized_pricing_groups(
+                conn, filters,
+                [("name", "COALESCE(NULLIF(r.provider,''),'unknown')")],
+                pricing,
+            )
+            billing_cost_rows = normalized_pricing_groups(
+                conn, filters,
+                [("name", "COALESCE(NULLIF(r.billing_mode,''),'unknown')")],
+                pricing,
+            )
+
+            runtime = normalized_runtime_breakdown(conn, filters, pricing)
+
+            account_usage = normalized_group_rows(
+                conn, filters,
+                "COALESCE(NULLIF({a}.account_connection_id,''),'__unknown__')",
+                "COALESCE(NULLIF({a}.account_display_name,''),'Unknown account')",
+            )
+            cost_map = {
+                str(row.get("id") or ""): float(row.get("api_cost") or 0)
+                for row in account_cost_rows
+            }
+            for row in account_usage:
+                row["api_cost"] = cost_map.get(str(row.get("id") or ""), 0.0)
+
+            account_drilldown = normalized_pricing_groups(
+                conn, filters,
+                [
+                    ("account_id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')"),
+                    ("account_name", "COALESCE(NULLIF(r.account_display_name,''),'Unknown account')"),
+                    ("agent_id", "COALESCE(NULLIF(r.agent_id,''),'unknown')"),
+                    ("agent_name", "COALESCE(NULLIF(r.agent_name,''),'Unknown agent')"),
+                    ("model_name", "COALESCE(NULLIF(r.model,''),'Unknown')"),
+                ],
+                pricing,
+            )
+
+            quota_rows = []
+            tables = {
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if "provider_quotas" in tables:
+                quota_rows = rows_as_dicts(conn.execute(
+                    """SELECT provider,label,used_percent,resets_at,value_label,detail,observed_at
+                         FROM provider_quotas
+                        WHERE source_system=?
+                        ORDER BY provider,label""",
+                    (usage_model.SOURCE_PAPERCLIP,),
+                ).fetchall())
+
+            used_models = {
+                str(row.get("name") or "")
+                for row in model_rows
+                if row.get("name")
+            }
             price_models = []
             aliases = pricing.get("aliases") or {}
             for model in sorted(used_models):
-                canonical = str(aliases.get(model.lower(), model.lower())) if isinstance(aliases, dict) else model.lower()
+                canonical = (
+                    str(aliases.get(model.lower(), model.lower()))
+                    if isinstance(aliases, dict) else model.lower()
+                )
                 rates = rates_for(model, pricing)
-                price_models.append({"model": model, "canonical_model": canonical, "rates": rates, "priced": bool(rates)})
+                price_models.append({
+                    "model": model,
+                    "canonical_model": canonical,
+                    "rates": rates,
+                    "priced": bool(rates),
+                })
 
             return {
-                "ready": True, "tab": "subscription", "filters": filters,
-                "metadata": decode_metadata(conn), "summary": summary,
-                "models": sorted(model_rows, key=lambda r: float(r.get("api_cost") or 0), reverse=True),
-                "agents": sorted(agent_rows, key=lambda r: float(r.get("api_cost") or 0), reverse=True),
+                "ready": True,
+                "tab": "subscription",
+                "filters": filters,
+                "metadata": decode_metadata(conn),
+                "summary": summary,
+                "models": sorted(model_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "agents": sorted(agent_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "accounts": sorted(account_usage, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "providers": sorted(provider_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "billing_modes": sorted(billing_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "account_drilldown": sorted(account_drilldown, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
                 "daily_models": daily_models,
                 "runtime_summary": runtime["summary"],
                 "runtime_agents": runtime["agents"],
-                "runtime_daily": runtime["daily"],
+                "provider_quotas": quota_rows,
                 "pricing": {
                     "source_url": pricing.get("source_url"),
                     "as_of": pricing.get("as_of"),
@@ -1213,11 +1317,19 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                     "long_context_threshold": pricing.get("long_context_threshold"),
                     "used_models": price_models,
                 },
+                "actual_cost_note": (
+                    "Actual provider cost is shown only when the source reports it. "
+                    "Local models are recorded as no provider charge, which is not the same as zero economic cost."
+                ),
+                "quota_note": (
+                    "Paperclip's current quota endpoint reports provider-level windows, not a connection/account id. "
+                    "Quota is therefore not attributed to an individual subscription."
+                ),
             }
         finally:
             conn.close()
 
-    return cached_payload(data_dir, "subscription", filters, (), build)
+    return cached_payload(data_dir, "subscription", filters, ("normalized-v1",), build)
 
 
 def insights_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
