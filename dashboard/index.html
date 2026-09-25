@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Codex Usage Dashboard</title>
+  <title>AI Agent Usage Dashboard</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="shell">
     <div class="header">
       <div>
-        <h1>Codex usage</h1>
-        <p>Local rollout telemetry · token, agent, activity and efficiency analysis</p>
+        <h1>AI agent usage</h1>
+        <p>Unified local telemetry · Codex, Paperclip, subscriptions, APIs and local models</p>
       </div>
       <div class="header-actions">
         <button id="refreshDataBtn" class="primary-btn" type="button">Refresh data</button>
@@ -35,20 +35,26 @@
       <div class="filters">
         <div class="field"><label>From</label><input id="fromDate" type="date" /></div>
         <div class="field"><label>To</label><input id="toDate" type="date" /></div>
+        <div class="field"><label>Source</label><select id="sourceFilter"><option value="">All sources</option></select></div>
+        <div class="field"><label>Billing mode</label><select id="billingFilter"><option value="">All billing modes</option></select></div>
+        <div class="field"><label>Provider</label><select id="providerFilter"><option value="">All providers</option></select></div>
+        <div class="field"><label>Account / subscription</label><select id="accountFilter"><option value="">All accounts</option></select></div>
+        <div class="field"><label>Agent</label><select id="agentFilter"><option value="">All agents</option></select></div>
         <div class="field"><label>Model</label><select id="modelFilter"><option value="">All models</option></select></div>
-        <div class="field"><label>Agent / role</label><select id="agentFilter"><option value="">All roles</option></select></div>
         <div class="field"><label>Effort</label><select id="effortFilter"><option value="">All efforts</option></select></div>
         <div class="field"><label>Project</label><select id="projectFilter"><option value="">All projects</option></select></div>
+        <div id="targetModelFilterWrap" class="field" hidden><label>Target model</label><select id="targetModelFilter"><option value="">Choose target model</option></select></div>
         <button id="resetBtn" type="button">Reset</button>
       </div>
     </div>
 
     <nav class="tabs" aria-label="Dashboard sections">
-      <button class="tab-btn active" type="button" data-tab="token">Token usage</button>
+      <button class="tab-btn active" type="button" data-tab="token">AI usage</button>
       <button class="tab-btn" type="button" data-tab="subscription">Subscription value</button>
-      <button class="tab-btn" type="button" data-tab="insights">Useful insights</button>
-      <button class="tab-btn" type="button" data-tab="activity">Activity over time</button>
-      <button class="tab-btn" type="button" data-tab="sessions">Highest-usage sessions</button>
+      <button class="tab-btn" type="button" data-tab="workload">Workload estimator</button>
+      <button class="tab-btn" type="button" data-tab="activity">Activity &amp; tools</button>
+      <button class="tab-btn" type="button" data-tab="insights">Codex diagnostics</button>
+      <button class="tab-btn" type="button" data-tab="sessions">Runs</button>
     </nav>
 
     <div id="content"></div>
@@ -60,7 +66,7 @@
   <div id="loadingOverlay" class="loading-overlay" aria-live="polite">
     <div class="loading-card">
       <div class="spinner"></div>
-      <div id="loadingTitle" class="loading-title">Loading Codex usage…</div>
+      <div id="loadingTitle" class="loading-title">Loading AI usage…</div>
       <div id="loadingSub" class="loading-sub">Reading local analytics database</div>
     </div>
   </div>
@@ -68,7 +74,7 @@
   <div id="refreshModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="refreshTitle">
     <div class="modal">
       <div class="modal-head">
-        <h2 id="refreshTitle">Refresh Codex data</h2>
+        <h2 id="refreshTitle">Refresh AI usage data</h2>
         <button id="closeRefreshModal" type="button" aria-label="Close">Close</button>
       </div>
       <div class="modal-body">
