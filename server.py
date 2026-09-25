@@ -1894,6 +1894,7 @@ def migrate_existing_database(data_dir: Path, codex_home: Path) -> None:
         if not required <= names:
             return
 
+        usage_model.ensure_schema(conn)
         conn.execute('CREATE TABLE IF NOT EXISTS configured_skills ("name" TEXT, "skill_file" TEXT)')
         skills = collector.load_configured_skills(codex_home, False) if codex_home.exists() else []
         conn.execute("DELETE FROM configured_skills")
@@ -1942,6 +1943,28 @@ def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     if db_path(data_dir).exists():
         migrate_existing_database(data_dir, codex_home)
+        try:
+            conn = sqlite3.connect(db_path(data_dir), timeout=30)
+            try:
+                usage_model.ensure_schema(conn)
+                existing = int(conn.execute(
+                    "SELECT COUNT(*) FROM usage_records WHERE source_system=?",
+                    (usage_model.SOURCE_CODEX,),
+                ).fetchone()[0])
+                source_rows = int(conn.execute("SELECT COUNT(*) FROM responses").fetchone()[0])
+                conn.commit()
+            finally:
+                conn.close()
+            if source_rows and existing == 0:
+                normalized = usage_model.sync_codex_usage(db_path(data_dir), None)
+                clear_cache()
+                print(
+                    f"Normalized existing Codex history: {normalized['records']:,} records, "
+                    f"{normalized['runs']:,} runs.",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"Warning: normalized usage bootstrap failed: {exc}", file=sys.stderr, flush=True)
         return
     if not (data_dir / "codex_usage_records.csv").exists() or not codex_home.exists():
         return
@@ -1960,7 +1983,7 @@ def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
-    server_version = "CodexUsageDashboard/2.0"
+    server_version = "AgentUsageDashboard/3.0"
 
     def __init__(self, *args, directory=None, **kwargs):
         super().__init__(*args, directory=str(DASHBOARD_DIR), **kwargs)
