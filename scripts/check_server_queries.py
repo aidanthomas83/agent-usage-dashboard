@@ -65,6 +65,13 @@ def main() -> int:
             "duration_ms": 5000,
             "time_to_first_token_ms": 400,
             "context_utilization_pct": 20.0,
+            "responses": 1,
+            "input_tokens": 1000,
+            "cached_input_tokens": 800,
+            "fresh_input_tokens": 200,
+            "output_tokens": 100,
+            "reasoning_output_tokens": 20,
+            "total_tokens": 1100,
         }
         skill = {
             "date": "2026-09-23",
