@@ -474,7 +474,7 @@ function renderSubscription(data){
 function renderInsights(data){
   const s=data.summary||{},t=data.turn_summary||{},sk=data.skill_summary||{},latest=data.latest_rate_limit;
   return`
-    <div class="tab-title"><div><h2>Useful insights</h2><p>Larger diagnostic cards make context, latency, reliability and skill activity easier to scan.</p></div></div>
+    <div class="tab-title"><div><h2>Codex diagnostics</h2><p>Codex-specific context, latency, compaction, reliability and rate-limit telemetry. Cross-provider filters that do not represent Codex intentionally return no data here.</p></div></div>
     <div class="insight-grid">
       ${insight('Context','Average input / response',fmt(s.avg_input),'Average request context sent to the model.','var(--blue)')}
       ${insight('Context','P95 input / response',fmt(s.p95_input),'95% of responses have input at or below this value.','var(--purple)')}
@@ -505,7 +505,7 @@ function renderActivity(data){
   const runtimeColor=name=>name==='Agent compute time'?'#0876db':name==='Active wall-clock time'?'#9aa4b2':agentColor(name);
   const hourlyCostColor=name=>name==='Cost / agent-hour'?'#37ae69':'#7c5ce5';
   return`
-    <div class="tab-title"><div><h2>Activity over time</h2><p>Agent runtime, model/turn activity and skill usage for the selected period.</p></div></div>
+    <div class="tab-title"><div><h2>Activity & tools</h2><p>Provider-agnostic runtime/model activity, with Codex-specific MCP and skill telemetry where available.</p></div></div>
 
     <div class="kpis runtime-kpis">
       ${kpi('Agent compute time',fmtDuration(rs.agent_compute_ms),'Sum of all agent turn durations','var(--blue)')}
@@ -523,8 +523,8 @@ function renderActivity(data){
     </div>
 
     <div class="panel full-panel mt">
-      <h3>Agent compute time by role</h3>
-      <div class="desc">Daily cumulative turn duration for each recorded agent role. Concurrent roles can make the daily total exceed 24 hours.</div>
+      <h3>Agent compute time by agent</h3>
+      <div class="desc">Daily cumulative run duration for each recorded agent. Concurrent agents can make the daily total exceed 24 hours.</div>
       <div class="chart activity-chart-large">${lineChart(byAgent,'name','hours',agentColor,{height:380,maxSeries:10,axisFmt:fmtHoursAxis,valueFmt:v=>fmtDuration(n(v)*3600000)})}</div>
     </div>
 
@@ -538,8 +538,8 @@ function renderActivity(data){
     <div class="panel full-panel mt"><h3>Turns by model</h3><div class="desc">Recorded task/turn volume by model over time.</div><div class="chart activity-chart-large">${lineChart(data.turns_by_model||[],'model','turns',modelColor,{height:380,maxSeries:8})}</div></div>
 
     <div class="panel full-panel mt">
-      <h3>MCP integrations and tool calls</h3>
-      <div class="desc">Completed MCP activity grouped by integration and tool. Current Codex typed MCP events are preferred; older rollouts fall back to attributable MCP call records.</div>
+      <h3>Codex MCP integrations and tool calls</h3>
+      <div class="desc">Codex rollout MCP activity grouped by integration and tool. Paperclip provider/runtime usage is represented in the normalized run views rather than mixed into these Codex tool events.</div>
       <div class="grid-2 equal mcp-grid">
         <div>
           <h3>Calls by MCP integration</h3>
@@ -553,7 +553,7 @@ function renderActivity(data){
     </div>
 
     <div class="panel activity-skills">
-      <h3>Skill invocations over time</h3>
+      <h3>Codex skill invocations over time</h3>
       <div class="desc">All ${fmtExact(inv)} qualifying invocations across ${fmtExact(distinct)} distinct skills are represented. Detection follows concrete SKILL.md reads, skill-owned script execution, first-class skills.read calls and compatible historical signals.</div>
       <div class="skill-summary">${mini('Skill invocations',fmtExact(inv),'Total invocations in selection')}${mini('Distinct skills',fmtExact(distinct),'Unique observed skill names')}</div>
       <div class="chart skill-chart">${collapsed.length?lineChart(collapsed,'name','value',skillColor,{height:360,maxSeries:20}):'<div class="empty">No attributable skill invocations were found in this selection.</div>'}</div>
@@ -566,10 +566,57 @@ function renderActivity(data){
   `;
 }
 
+function renderWorkload(data){
+  if(data.requires_agent){
+    return `
+      <div class="tab-title"><div><h2>Workload estimator</h2><p>Use historical agent workload to estimate what a target API model would need to handle.</p></div></div>
+      <div class="panel empty"><b>Select an agent above.</b><br><br>The estimator intentionally requires a specific agent so the result is not confused with an account-wide or provider-wide forecast. Then choose a target model.</div>
+    `;
+  }
+  const s=data.summary||{},t=data.target||{},mix=data.model_mix||[];
+  return `
+    <div class="tab-title"><div><h2>Workload estimator</h2><p>${esc(data.agent?.name||'Selected agent')} · historical workload replay for the selected date range.</p></div></div>
+    <div class="kpis compact workload-kpis">
+      ${kpi('Runs',fmtExact(s.runs),`${n(s.runs_per_day).toFixed(2)} runs/day`,'var(--blue)')}
+      ${kpi('Token coverage',pct(s.token_coverage_pct),`${fmtExact(s.token_runs)} run(s) with token metrics`,'var(--teal)',n(s.token_coverage_pct)<80)}
+      ${kpi('Historical tokens',fmt(s.total_tokens),`${fmt(s.avg_tokens_per_token_run)} avg / measured run`,'var(--purple)')}
+      ${kpi('P95 / peak tokens',`${fmt(s.p95_tokens_per_run)} / ${fmt(s.peak_tokens_per_run)}`,'Measured runs only','var(--orange)')}
+      ${kpi('Recorded runtime',fmtDuration(s.runtime_ms),`${fmtMs(s.avg_runtime_ms)} avg · P95 ${fmtMs(s.p95_runtime_ms)}`,'var(--slate)')}
+      ${kpi('Current-model API estimate',fmtUsd(s.current_api_estimate),`${pct(s.current_api_coverage_pct)} pricing coverage`,'var(--green)',n(s.current_api_coverage_pct)<80)}
+    </div>
+
+    <div class="grid-2 equal mt">
+      <div class="panel">
+        <h3>Historical workload</h3>
+        <div class="desc">Token categories are additive only where the runtime reports them.</div>
+        <div class="skill-summary workload-summary">
+          ${mini('Fresh input',fmt(s.fresh_input_tokens),'uncached/cache-write workload')}
+          ${mini('Cached input',fmt(s.cached_input_tokens),'cache-read workload')}
+          ${mini('Output',fmt(s.output_tokens),'recorded output')}
+          ${mini('Calendar days',fmtExact(s.calendar_days),'selected range')}
+        </div>
+      </div>
+      <div class="panel target-estimate">
+        <h3>Target model estimate</h3>
+        <div class="desc">Choose <b>Target model</b> in the filter row. The calculation replays the measured token categories against that model's configured API price.</div>
+        ${t.model?
+          (t.priced?
+            `<div class="target-cost">${fmtUsd(t.api_estimate)}</div><div class="hval">${fmtExact(t.priced_runs)} measured run(s) repriced as ${esc(t.model)}</div>`:
+            `<div class="empty">No configured API price is available for <b>${esc(t.model)}</b>. The workload remains visible without inventing a price.</div>`):
+          '<div class="empty">Choose a target model above to calculate an API-equivalent estimate.</div>'}
+      </div>
+    </div>
+
+    <div class="panel full-panel mt"><h3>Historical model mix</h3><div class="desc">Useful when deciding whether the selected agent has already moved between models during this period.</div>${hbars(mix,n(s.total_tokens),modelColor,fmt,16)}</div>
+    <div class="note mt">${esc(data.caveat||'')}</div>
+  `;
+}
+
 function renderSessions(data){
   return`
-    <div class="tab-title"><div><h2>Highest-usage sessions</h2><p>Session-level token, cost and efficiency measures for the current filters.</p></div></div>
-    <div class="panel"><div class="sessions-note">${esc(data.note||'')}</div>${sessionTable(data.sessions||[])}</div>
+    <div class="tab-title"><div><h2>Runs</h2><p>Normalized run-level source, agent, account, provider, model, duration, token and cost attribution.</p></div></div>
+    ${sourceStatusPanel()}
+    <div class="panel"><div class="sessions-note">${esc(data.note||'')}</div>${runTable(data.sessions||[])}</div>
   `;
 }
 
@@ -577,6 +624,7 @@ function render(){
   if(!dashboard?.ready)return;
   const html=activeTab==='token'?renderToken(dashboard):
              activeTab==='subscription'?renderSubscription(dashboard):
+             activeTab==='workload'?renderWorkload(dashboard):
              activeTab==='insights'?renderInsights(dashboard):
              activeTab==='activity'?renderActivity(dashboard):
              renderSessions(dashboard);
