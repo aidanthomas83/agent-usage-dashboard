@@ -66,3 +66,30 @@
 .mcp-grid{margin-top:16px;align-items:start}
 .mcp-grid .table-wrap{max-height:390px;overflow:auto}
 .mcp-grid code{font-size:11px;white-space:nowrap}
+
+/* Provider-agnostic usage additions */
+.source-status-row{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+.source-status{display:flex;align-items:center;gap:7px;min-width:220px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel);font-size:10px;color:var(--muted)}
+.source-status .status-dot{background:var(--muted)}
+.source-status.ok .status-dot{background:var(--green)}
+.source-status.warn .status-dot{background:var(--amber)}
+.source-status.muted .status-dot{background:var(--slate)}
+.source-status b{color:var(--text)}
+.kpis.compact.usage-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+.kpis.subscription-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+.quota-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.target-estimate{min-height:180px}.target-cost{font-size:36px;font-weight:800;letter-spacing:-.04em;margin:18px 0 4px}
+.workload-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+.runs-table table{min-width:1450px}
+.filters{grid-template-columns:repeat(5,minmax(150px,1fr))}
+#targetModelFilterWrap[hidden]{display:none!important}
+@media(max-width:1200px){
+  .filters{grid-template-columns:repeat(3,minmax(140px,1fr))}
+  .kpis.compact.usage-kpis,.kpis.subscription-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .quota-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:700px){
+  .filters{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpis.compact.usage-kpis,.kpis.subscription-kpis{grid-template-columns:1fr 1fr}
+  .quota-grid{grid-template-columns:1fr}
+}
