@@ -275,6 +275,19 @@ def source_label(value: str) -> str:
     }.get(str(value or ""), str(value or "Unknown").replace("_", " ").title())
 
 
+def current_account_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """Resolve current labels from immutable account/connection ids."""
+    names = {"__unknown__": "Unknown account"}
+    try:
+        for row in conn.execute(
+            "SELECT connection_id,display_name FROM usage_accounts WHERE connection_id<>''"
+        ).fetchall():
+            names[str(row[0])] = str(row[1] or row[0])
+    except sqlite3.Error:
+        pass
+    return names
+
+
 def normalized_group_rows(
     conn: sqlite3.Connection,
     filters: dict[str, str],
@@ -1148,11 +1161,13 @@ def token_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
                 conn, filters,
                 "COALESCE(NULLIF({a}.billing_mode,''),'unknown')",
             )
+            account_names = current_account_names(conn)
             accounts = normalized_group_rows(
                 conn, filters,
                 "COALESCE(NULLIF({a}.account_connection_id,''),'__unknown__')",
-                "COALESCE(NULLIF({a}.account_display_name,''),'Unknown account')",
             )
+            for row in accounts:
+                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
             sources = normalized_group_rows(
                 conn, filters,
                 "COALESCE(NULLIF({a}.source_system,''),'unknown')",
@@ -1261,14 +1276,14 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                 ],
                 pricing,
             )
+            account_names = current_account_names(conn)
             account_cost_rows = normalized_pricing_groups(
                 conn, filters,
-                [
-                    ("id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')"),
-                    ("name", "COALESCE(NULLIF(r.account_display_name,''),'Unknown account')"),
-                ],
+                [("id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')")],
                 pricing,
             )
+            for row in account_cost_rows:
+                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
             provider_cost_rows = normalized_pricing_groups(
                 conn, filters,
                 [("name", "COALESCE(NULLIF(r.provider,''),'unknown')")],
@@ -1285,8 +1300,9 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
             account_usage = normalized_group_rows(
                 conn, filters,
                 "COALESCE(NULLIF({a}.account_connection_id,''),'__unknown__')",
-                "COALESCE(NULLIF({a}.account_display_name,''),'Unknown account')",
             )
+            for row in account_usage:
+                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
             cost_map = {
                 str(row.get("id") or ""): float(row.get("api_cost") or 0)
                 for row in account_cost_rows
@@ -1298,13 +1314,14 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                 conn, filters,
                 [
                     ("account_id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')"),
-                    ("account_name", "COALESCE(NULLIF(r.account_display_name,''),'Unknown account')"),
                     ("agent_id", "COALESCE(NULLIF(r.agent_id,''),'unknown')"),
                     ("agent_name", "COALESCE(NULLIF(r.agent_name,''),'Unknown agent')"),
                     ("model_name", "COALESCE(NULLIF(r.model,''),'Unknown')"),
                 ],
                 pricing,
             )
+            for row in account_drilldown:
+                row["account_name"] = account_names.get(str(row.get("account_id") or "__unknown__"), "Unknown account")
 
             quota_rows = []
             tables = {
