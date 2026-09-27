@@ -310,7 +310,7 @@ function mcpToolTable(rows){
     <td>${esc(x.mcp||'Unknown')}</td><td><code>${esc(x.tool||'Unknown')}</code></td>
     <td class="num"><b>${fmtExact(x.calls)}</b></td><td class="num">${n(x.duration_ms)?fmtDuration(x.duration_ms):'—'}</td>
   </tr>`).join('');
-  return`<div class="table-wrap"><table><thead><tr><th>MCP integration</th><th>Tool</th><th class="num">Calls</th><th class="num">Recorded time</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  return`<div class="table-wrap mcp-tool-table-wrap"><table class="mcp-tool-table"><colgroup><col class="mcp-col-integration"><col class="mcp-col-tool"><col class="mcp-col-calls"><col class="mcp-col-time"></colgroup><thead><tr><th>MCP integration</th><th>Tool</th><th class="num">Calls</th><th class="num">Recorded time</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function sourceStatusPanel(){
