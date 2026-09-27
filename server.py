@@ -45,6 +45,14 @@ _CACHE_LOCK = threading.Lock()
 _CACHE: dict[tuple, dict[str, object]] = {}
 _CACHE_MAX = 128
 
+_STARTUP_LOCK = threading.Lock()
+_STARTUP: dict[str, object] = {
+    "status": "idle",
+    "message": "",
+    "started_at": None,
+    "finished_at": None,
+}
+
 DEFAULT_PRICING: dict[str, object] = {
     "version": 1,
     "source_url": PRICING_SOURCE_URL,
@@ -79,6 +87,22 @@ DEFAULT_PRICING: dict[str, object] = {
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def startup_status() -> dict[str, object]:
+    with _STARTUP_LOCK:
+        return dict(_STARTUP)
+
+
+def set_startup_status(status: str, message: str = "") -> None:
+    with _STARTUP_LOCK:
+        _STARTUP["status"] = status
+        _STARTUP["message"] = message
+        if status == "running":
+            _STARTUP["started_at"] = utc_now()
+            _STARTUP["finished_at"] = None
+        elif status in {"completed", "failed"}:
+            _STARTUP["finished_at"] = utc_now()
 
 
 def parse_args() -> argparse.Namespace:
@@ -913,7 +937,7 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
             "sources": [], "billing_modes": [], "providers": [], "accounts": [],
             "models": [], "agents": [], "efforts": [], "projects": [],
             "target_models": [], "source_status": [],
-            "metadata": {}, "refresh": refresh_status(),
+            "metadata": {}, "refresh": refresh_status(), "startup": startup_status(),
         }
     try:
         metadata = decode_metadata(conn)
@@ -1039,6 +1063,7 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
                 "source_status": source_status,
                 "metadata": metadata,
                 "refresh": refresh_status(),
+                "startup": startup_status(),
             }
 
         # Upgrade fallback while the normalized projection is being bootstrapped.
@@ -1069,6 +1094,7 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
             "source_status": [],
             "metadata": metadata,
             "refresh": refresh_status(),
+            "startup": startup_status(),
         }
     finally:
         conn.close()
@@ -1956,11 +1982,13 @@ def migrate_existing_database(data_dir: Path, codex_home: Path) -> None:
 
 
 def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
-    """Keep startup non-blocking; maintain/migrate data after HTTP is already serving."""
+    """Keep startup non-blocking while exposing migration/bootstrap progress to the UI."""
+    set_startup_status("running", "Preparing analytics database from existing history…")
     data_dir.mkdir(parents=True, exist_ok=True)
-    if db_path(data_dir).exists():
-        migrate_existing_database(data_dir, codex_home)
-        try:
+    try:
+        if db_path(data_dir).exists():
+            set_startup_status("running", "Checking and upgrading the existing analytics database…")
+            migrate_existing_database(data_dir, codex_home)
             conn = sqlite3.connect(db_path(data_dir), timeout=30)
             try:
                 usage_model.ensure_schema(conn)
@@ -1973,6 +2001,10 @@ def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
             finally:
                 conn.close()
             if source_rows and existing == 0:
+                set_startup_status(
+                    "running",
+                    f"Normalizing {source_rows:,} existing Codex response records…",
+                )
                 normalized = usage_model.sync_codex_usage(db_path(data_dir), None)
                 clear_cache()
                 print(
@@ -1980,23 +2012,29 @@ def prepare_database_background(data_dir: Path, codex_home: Path) -> None:
                     f"{normalized['runs']:,} runs.",
                     flush=True,
                 )
-        except Exception as exc:
-            print(f"Warning: normalized usage bootstrap failed: {exc}", file=sys.stderr, flush=True)
-        return
-    if not (data_dir / "codex_usage_records.csv").exists() or not codex_home.exists():
-        return
-    proc = subprocess.run(
-        [
-            sys.executable, str(ROOT / "collect_codex_usage.py"),
-            "--days", "1", "--codex-home", str(codex_home), "--output-dir", str(data_dir),
-        ],
-        cwd=ROOT, text=True, capture_output=True,
-    )
-    if proc.returncode != 0:
-        print("Warning: initial SQLite build failed:\n" + (proc.stderr or proc.stdout or ""), file=sys.stderr, flush=True)
-    else:
+            set_startup_status("completed", "Analytics database ready.")
+            return
+
+        if not (data_dir / "codex_usage_records.csv").exists() or not codex_home.exists():
+            set_startup_status("completed", "No existing analytics history to prepare.")
+            return
+
+        set_startup_status("running", "Building the initial analytics database…")
+        proc = subprocess.run(
+            [
+                sys.executable, str(ROOT / "collect_codex_usage.py"),
+                "--days", "1", "--codex-home", str(codex_home), "--output-dir", str(data_dir),
+            ],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout or "Initial SQLite build failed.")
         clear_cache()
         print("Initial SQLite database build completed.", flush=True)
+        set_startup_status("completed", "Analytics database ready.")
+    except Exception as exc:
+        set_startup_status("failed", str(exc))
+        print(f"Warning: startup analytics preparation failed: {exc}", file=sys.stderr, flush=True)
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
