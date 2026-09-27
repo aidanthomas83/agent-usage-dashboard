@@ -61,6 +61,7 @@ let activeTab='token';
 let activeQuickRange=0;
 let dashboardController=null;
 let refreshPoll=null;
+let startupPoll=null;
 let refreshMode='days';
 let sortState={key:'total',dir:-1};
 let pricingMessage='';
@@ -156,14 +157,26 @@ async function loadMeta(preserve=false){
   $('refreshFrom').value=filters().from||meta?.data_min||'';
   $('refreshTo').value=filters().to||meta?.data_max||'';
   if(meta?.refresh?.status==='running')startRefreshPolling(meta.refresh);
+  if(!meta?.ready&&meta?.startup?.status==='running')startStartupPolling();
 }
 
 function cacheKey(){return activeTab+'?'+queryString(filters());}
 async function loadDashboard(showBusy=true,force=false){
   if(!meta?.ready){
     dashboard=null;
-    $('content').innerHTML=`<div class="panel empty"><b>No analytics database yet.</b><br><br>Use <b>Refresh data</b> to build it from your mounted .codex history.</div>`;
-    $('sourceNote').textContent='No local analytics data loaded';$('updatedNote').textContent='';updateRangeStatus();hideLoading();return;
+    const startup=meta?.startup||{},status=startup.status||'idle';
+    if(status==='running'){
+      $('content').innerHTML=`<div class="panel empty"><b>Preparing analytics database…</b><br><br>${esc(startup.message||'Normalizing your existing usage history. The dashboard will load automatically when this finishes.')}</div>`;
+      $('sourceNote').textContent='Existing analytics data is being prepared';
+      startStartupPolling();
+    }else if(status==='failed'){
+      $('content').innerHTML=`<div class="panel error-panel"><b>Could not prepare the analytics database.</b><br><br>${esc(startup.message||'Check the Docker logs for details.')}</div>`;
+      $('sourceNote').textContent='Analytics database preparation failed';
+    }else{
+      $('content').innerHTML=`<div class="panel empty"><b>No analytics data yet.</b><br><br>Use <b>Refresh data</b> to build it from your mounted .codex history.</div>`;
+      $('sourceNote').textContent='No local analytics data loaded';
+    }
+    $('updatedNote').textContent='';updateRangeStatus();hideLoading();return;
   }
   const key=cacheKey();
   if(!force&&clientCache.has(key)){
@@ -693,6 +706,27 @@ function showRefreshBanner(state){
   if(state.status==='running'){b.querySelector('.spinner').style.display='block';text.textContent=state.message||'Refreshing AI usage telemetry in the background…';}
   else{b.querySelector('.spinner').style.display='none';text.textContent=state.message||state.status;}
 }
+function startStartupPolling(){
+  if(startupPoll)return;
+  const poll=async()=>{
+    try{
+      meta=await api('/api/meta');
+      const status=meta?.startup?.status||'idle';
+      if(meta?.ready||status!=='running'){
+        clearInterval(startupPoll);startupPoll=null;
+        clientCache.clear();dashboard=null;initFilters(true);
+        await loadDashboard(false,true);
+        return;
+      }
+      const startup=meta.startup||{};
+      $('content').innerHTML=`<div class="panel empty"><b>Preparing analytics database…</b><br><br>${esc(startup.message||'Normalizing your existing usage history. The dashboard will load automatically when this finishes.')}</div>`;
+      $('sourceNote').textContent='Existing analytics data is being prepared';
+    }catch{}
+  };
+  startupPoll=setInterval(poll,1500);
+  poll();
+}
+
 function startRefreshPolling(initial){
   if(initial)showRefreshBanner(initial);if(refreshPoll)clearInterval(refreshPoll);
   const poll=async()=>{
