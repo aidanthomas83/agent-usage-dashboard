@@ -657,7 +657,7 @@ function renderWorkload(data){
   if(data.requires_agent){
     return `
       <div class="tab-title"><div><h2>Workload estimator</h2><p>Use historical agent workload to estimate what a target API model would need to handle.</p></div></div>
-      <div class="panel empty"><b>Select an agent above.</b><br><br>The estimator intentionally requires a specific agent so the result is not confused with an account-wide or provider-wide forecast. Then choose a target model.</div>
+      <div class="panel empty"><b>Select one or more agents above.</b><br><br>The estimator combines the historical workload of the selected agents. Then choose a target model.</div>
     `;
   }
   const s=data.summary||{},t=data.target||{},mix=data.model_mix||[];
@@ -723,18 +723,40 @@ function render(){
   $('refreshPricingBtn')?.addEventListener('click',refreshLatestPricing);
 }
 
-async function applyFilters(){
+async function applyFilters(refreshOptions=false){
   activeQuickRange=0;updateQuickButtons();
   const from=$('fromDate'),to=$('toDate');from.value=clampDate(from.value);to.value=clampDate(to.value);
   if(from.value&&to.value&&from.value>to.value)to.value=from.value;
-  dashboard=null;await loadDashboard(true);
+  const row=document.querySelector('.filter-row');row?.classList.add('filtering');
+  try{
+    if(refreshOptions)await loadMeta(true,true);
+    await loadDashboard(true);
+  }finally{row?.classList.remove('filtering');}
 }
-function setQuickRange(days){activeQuickRange=days;updateQuickButtons();$('fromDate').value=quickRangeStart(days);$('toDate').value=meta.data_max||'';dashboard=null;loadDashboard(true);}
-function resetFilters(){activeQuickRange=0;initFilters(false);dashboard=null;loadDashboard(true);}
+function scheduleFilters(){
+  if(filterTimer)clearTimeout(filterTimer);
+  filterTimer=setTimeout(()=>{filterTimer=null;applyFilters(false);},180);
+}
+async function setQuickRange(days){
+  activeQuickRange=days;updateQuickButtons();
+  $('fromDate').value=quickRangeStart(days);$('toDate').value=meta.data_max||'';
+  const row=document.querySelector('.filter-row');row?.classList.add('filtering');
+  try{await loadMeta(true,true);await loadDashboard(true);}
+  finally{row?.classList.remove('filtering');}
+}
+function resetFilters(){activeQuickRange=0;initFilters(false);loadDashboard(true);}
 
 function renderTip(raw){
   try{const data=JSON.parse(raw||'{}'),items=Array.isArray(data.items)?data.items:[];$('tooltip').innerHTML=`${data.title?`<div class="tip-title">${esc(data.title)}</div>`:''}${items.map(item=>`<div class="tip-row"><span class="tip-swatch" style="--tip-color:${escAttr(item.color||'var(--muted)')}"></span><span>${esc(item.label||'')}</span><span class="tip-value">${esc(item.value??'')}</span></div>`).join('')}`;return true;}catch{return false;}
 }
+document.addEventListener('click',e=>{
+  document.querySelectorAll('.multi-select.open').forEach(node=>{
+    if(!node.contains(e.target)){
+      node.classList.remove('open');
+      node.querySelector('.multi-select-button')?.setAttribute('aria-expanded','false');
+    }
+  });
+});
 document.addEventListener('mousemove',e=>{const t=e.target.closest?.('[data-tip-json]'),tip=$('tooltip');if(!t){tip.style.display='none';return;}renderTip(t.getAttribute('data-tip-json'));tip.style.display='block';let x=e.clientX+14,y=e.clientY+14;tip.style.left=x+'px';tip.style.top=y+'px';const r=tip.getBoundingClientRect();if(r.right>innerWidth-8)tip.style.left=(e.clientX-r.width-14)+'px';if(r.bottom>innerHeight-8)tip.style.top=(e.clientY-r.height-14)+'px';});
 document.addEventListener('mouseleave',()=>{$('tooltip').style.display='none';});
 
@@ -821,7 +843,7 @@ function startRefreshPolling(initial){
 function bind(){
   document.querySelectorAll('.quick-range').forEach(btn=>btn.addEventListener('click',()=>setQuickRange(Number(btn.dataset.days))));
   document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
-  ['fromDate','toDate','sourceFilter','billingFilter','providerFilter','accountFilter','agentFilter','modelFilter','effortFilter','projectFilter','targetModelFilter'].forEach(id=>$(id).addEventListener('change',applyFilters));
+  ['fromDate','toDate','sourceFilter','billingFilter','providerFilter','modelFilter','effortFilter','targetModelFilter'].forEach(id=>$(id).addEventListener('change',()=>applyFilters(id==='fromDate'||id==='toDate')));
   $('resetBtn').addEventListener('click',resetFilters);
   $('refreshDataBtn').addEventListener('click',openRefreshModal);
   $('closeRefreshModal').addEventListener('click',closeRefreshModal);
