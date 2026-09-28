@@ -964,7 +964,11 @@ def pricing_groups(
     return conn.execute(sql, values).fetchall()
 
 
-def meta_payload(data_dir: Path) -> dict[str, object]:
+def meta_payload(
+    data_dir: Path,
+    from_date: str = "",
+    to_date: str = "",
+) -> dict[str, object]:
     conn = open_db(data_dir)
     if conn is None:
         return {
@@ -1050,10 +1054,26 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
             efforts = distinct(
                 "SELECT DISTINCT reasoning_effort FROM usage_records WHERE reasoning_effort<>'' ORDER BY reasoning_effort"
             )
-            projects = distinct(
-                """SELECT DISTINCT project_name FROM usage_runs
-                    WHERE project_name<>'' ORDER BY project_name"""
-            )
+            project_clauses = ["project_name<>''"]
+            project_values: list[object] = []
+            if from_date:
+                date.fromisoformat(from_date)
+                project_clauses.append("date>=?")
+                project_values.append(from_date)
+            if to_date:
+                date.fromisoformat(to_date)
+                project_clauses.append("date<=?")
+                project_values.append(to_date)
+            projects = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT project_name FROM usage_runs WHERE "
+                    + " AND ".join(project_clauses)
+                    + " ORDER BY project_name",
+                    project_values,
+                ).fetchall()
+                if row[0] not in (None, "")
+            ]
             source_status = []
             if "source_status" in tables:
                 for row in conn.execute(
@@ -1124,7 +1144,12 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
                 for role in codex_agents
             ],
             "efforts": distinct("SELECT DISTINCT reasoning_effort FROM responses WHERE reasoning_effort<>'' ORDER BY reasoning_effort"),
-            "projects": distinct("SELECT DISTINCT project FROM responses WHERE project<>'' ORDER BY project"),
+            "projects": distinct(
+                "SELECT DISTINCT project FROM responses WHERE project<>''"
+                + (" AND date>='" + from_date + "'" if from_date else "")
+                + (" AND date<='" + to_date + "'" if to_date else "")
+                + " ORDER BY project"
+            ),
             "target_models": sorted(str(model) for model in (load_pricing(data_dir).get("models") or {}).keys()),
             "source_status": [],
             "metadata": metadata,
@@ -2106,7 +2131,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/meta":
-            self.send_json(meta_payload(self.app_server.data_dir))
+            try:
+                query = parse_qs(parsed.query)
+                from_date = (query.get("from") or [""])[0].strip()
+                to_date = (query.get("to") or [""])[0].strip()
+                self.send_json(meta_payload(self.app_server.data_dir, from_date, to_date))
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/api/dashboard":
             try:
