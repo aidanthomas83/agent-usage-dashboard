@@ -1879,7 +1879,7 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
             agent_name = (
                 ", ".join(agent_names)
                 if agent_names
-                else ", ".join(selected_values(filters, "agent)) or "Selected agents"
+                else ", ".join(selected_values(filters, "agent")) or "Selected agents"
             )
 
             return {
