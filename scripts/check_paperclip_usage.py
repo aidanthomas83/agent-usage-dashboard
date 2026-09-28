@@ -127,6 +127,7 @@ def main() -> int:
     assert by_id["local-1"]["actual_cost_available"] == 1
     assert by_id["local-1"]["actual_provider_cost_usd"] == 0.0
     assert by_id["api-1"]["billing_mode"] == "api"
+    assert paperclip.normalize_billing("subscription_included") == "subscription"
     assert by_id["missing-usage"]["token_metrics_available"] == 0
     assert by_id["unknown-account"]["account_connection_id"] == "missing-connection"
     assert by_id["unknown-account"]["account_display_name"] == "Unknown account"
