@@ -723,8 +723,8 @@ function render(){
   $('refreshPricingBtn')?.addEventListener('click',refreshLatestPricing);
 }
 
-async function applyFilters(refreshOptions=false){
-  activeQuickRange=0;updateQuickButtons();
+async function applyFilters(refreshOptions=false,clearQuickRange=false){
+  if(clearQuickRange){activeQuickRange=0;updateQuickButtons();}
   const from=$('fromDate'),to=$('toDate');from.value=clampDate(from.value);to.value=clampDate(to.value);
   if(from.value&&to.value&&from.value>to.value)to.value=from.value;
   const row=document.querySelector('.filter-row');row?.classList.add('filtering');
@@ -735,7 +735,7 @@ async function applyFilters(refreshOptions=false){
 }
 function scheduleFilters(){
   if(filterTimer)clearTimeout(filterTimer);
-  filterTimer=setTimeout(()=>{filterTimer=null;applyFilters(false);},180);
+  filterTimer=setTimeout(()=>{filterTimer=null;applyFilters(false,false);},180);
 }
 async function setQuickRange(days){
   activeQuickRange=days;updateQuickButtons();
@@ -843,7 +843,10 @@ function startRefreshPolling(initial){
 function bind(){
   document.querySelectorAll('.quick-range').forEach(btn=>btn.addEventListener('click',()=>setQuickRange(Number(btn.dataset.days))));
   document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
-  ['fromDate','toDate','sourceFilter','billingFilter','providerFilter','modelFilter','effortFilter','targetModelFilter'].forEach(id=>$(id).addEventListener('change',()=>applyFilters(id==='fromDate'||id==='toDate')));
+  ['fromDate','toDate','sourceFilter','billingFilter','providerFilter','modelFilter','effortFilter','targetModelFilter'].forEach(id=>$(id).addEventListener('change',()=>{
+    const dateChanged=id==='fromDate'||id==='toDate';
+    applyFilters(dateChanged,dateChanged);
+  }));
   $('resetBtn').addEventListener('click',resetFilters);
   $('refreshDataBtn').addEventListener('click',openRefreshModal);
   $('closeRefreshModal').addEventListener('click',closeRefreshModal);
