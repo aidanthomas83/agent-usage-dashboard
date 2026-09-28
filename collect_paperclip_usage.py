@@ -168,7 +168,7 @@ def split_provider_model(model: str) -> tuple[str, str]:
 
 def normalize_billing(value: Any) -> str:
     key = str(value or "").strip().lower().replace("-", "_")
-    if key in {"subscription", "included", "plan"}:
+    if key in {"subscription", "subscription_included", "included", "plan"}:
         return "subscription"
     if key in {"api", "api_key", "metered", "usage"}:
         return "api"
