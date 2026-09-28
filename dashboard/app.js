@@ -67,6 +67,12 @@ let sortState={key:'total',dir:-1};
 let pricingMessage='';
 const clientCache=new Map();
 const validTabs=new Set(['token','subscription','workload','activity','insights','sessions']);
+const multiState={
+  accountFilter:new Set(),
+  agentFilter:new Set(),
+  projectFilter:new Set()
+};
+let filterTimer=null;
 
 function showLoading(title='Loading Codex usage…',sub='Reading local analytics database'){
   $('loadingTitle').textContent=title;$('loadingSub').textContent=sub;$('loadingOverlay').classList.add('show');
@@ -81,19 +87,86 @@ function setNamedOptions(id,values,label){
     return `<option value="${escAttr(item.id??item.value??item.name)}">${esc(item.name??item.label??item.id)}</option>`;
   }).join('');
 }
+function multiValues(id){return [...(multiState[id]||new Set())].sort();}
+function multiSummary(id,items,placeholder){
+  const selected=multiValues(id);
+  if(!selected.length)return placeholder;
+  const names=new Map((items||[]).map(raw=>{
+    const item=typeof raw==='string'?{id:raw,name:raw}:raw;
+    return [String(item.id??item.value??item.name),String(item.name??item.label??item.id)];
+  }));
+  const labels=selected.map(value=>names.get(value)||value);
+  if(labels.length<=2)return labels.join(', ');
+  return `${labels.slice(0,2).join(', ')} +${labels.length-2}`;
+}
+function setMultiOptions(id,values,placeholder,preserveValues=[]){
+  const root=$(id),items=(values||[]).map(raw=>typeof raw==='string'?{id:raw,name:raw}:raw);
+  const available=new Set(items.map(item=>String(item.id??item.value??item.name)));
+  const selected=new Set((preserveValues||[]).filter(value=>available.has(String(value))).map(String));
+  multiState[id]=selected;
+  root.innerHTML=`
+    <button type="button" class="multi-select-button" aria-haspopup="listbox" aria-expanded="false">
+      <span class="multi-select-label"></span><span class="multi-select-count" hidden></span>
+    </button>
+    <div class="multi-select-menu">
+      <input class="multi-select-search" type="search" placeholder="Search…" />
+      <div class="multi-select-toolbar"><button type="button" data-action="all">Select all</button><button type="button" data-action="clear">Clear</button></div>
+      <div class="multi-select-options"></div>
+    </div>`;
+  const button=root.querySelector('.multi-select-button'),label=root.querySelector('.multi-select-label'),count=root.querySelector('.multi-select-count');
+  const search=root.querySelector('.multi-select-search'),options=root.querySelector('.multi-select-options');
+  const redraw=()=>{
+    label.textContent=multiSummary(id,items,placeholder);
+    const size=multiState[id].size;count.hidden=!size;count.textContent=size;
+    options.querySelectorAll('input[type="checkbox"]').forEach(input=>{input.checked=multiState[id].has(input.value);});
+  };
+  options.innerHTML=items.map(item=>{
+    const value=String(item.id??item.value??item.name),name=String(item.name??item.label??item.id);
+    return `<label class="multi-select-option" data-search="${escAttr(name.toLowerCase())}"><input type="checkbox" value="${escAttr(value)}"><span>${esc(name)}</span></label>`;
+  }).join('');
+  redraw();
+  button.addEventListener('click',e=>{
+    e.stopPropagation();
+    document.querySelectorAll('.multi-select.open').forEach(node=>{if(node!==root)node.classList.remove('open');});
+    root.classList.toggle('open');button.setAttribute('aria-expanded',root.classList.contains('open')?'true':'false');
+    if(root.classList.contains('open'))setTimeout(()=>search.focus(),0);
+  });
+  options.addEventListener('change',e=>{
+    const input=e.target.closest('input[type="checkbox"]');if(!input)return;
+    if(input.checked)multiState[id].add(input.value);else multiState[id].delete(input.value);
+    redraw();scheduleFilters();
+  });
+  root.querySelector('[data-action="all"]').addEventListener('click',()=>{
+    items.forEach(item=>multiState[id].add(String(item.id??item.value??item.name)));redraw();scheduleFilters();
+  });
+  root.querySelector('[data-action="clear"]').addEventListener('click',()=>{
+    multiState[id].clear();redraw();scheduleFilters();
+  });
+  search.addEventListener('input',()=>{
+    const term=search.value.trim().toLowerCase();
+    options.querySelectorAll('.multi-select-option').forEach(row=>{row.hidden=!!term&&!row.dataset.search.includes(term);});
+  });
+}
 function shiftIsoDate(iso,days){if(!iso)return'';const [y,m,d]=iso.split('-').map(Number),dt=new Date(Date.UTC(y,m-1,d+days));return dt.toISOString().slice(0,10);}
 function clampDate(value){if(!value)return value;if(meta?.data_min&&value<meta.data_min)return meta.data_min;if(meta?.data_max&&value>meta.data_max)return meta.data_max;return value;}
 function filters(){
   return {
     from:$('fromDate').value,to:$('toDate').value,
     source:$('sourceFilter').value,billing:$('billingFilter').value,
-    provider:$('providerFilter').value,account:$('accountFilter').value,
-    agent:$('agentFilter').value,model:$('modelFilter').value,
-    effort:$('effortFilter').value,project:$('projectFilter').value,
+    provider:$('providerFilter').value,account:multiValues('accountFilter'),
+    agent:multiValues('agentFilter'),model:$('modelFilter').value,
+    effort:$('effortFilter').value,project:multiValues('projectFilter'),
     target_model:activeTab==='workload'?$('targetModelFilter').value:''
   };
 }
-function queryString(obj){const q=new URLSearchParams();Object.entries(obj).forEach(([k,v])=>{if(v)q.set(k,v)});return q.toString();}
+function queryString(obj){
+  const q=new URLSearchParams();
+  Object.entries(obj).forEach(([k,v])=>{
+    if(Array.isArray(v)){v.forEach(item=>{if(item)q.append(k,item);});}
+    else if(v)q.set(k,v);
+  });
+  return q.toString();
+}
 function selectedCalendarDays(){
   const f=filters();if(!f.from||!f.to)return 0;
   const a=new Date(f.from+'T00:00:00Z'),b=new Date(f.to+'T00:00:00Z');
@@ -126,11 +199,11 @@ function initFilters(preserve=false){
   setNamedOptions('sourceFilter',meta?.sources||[],'All sources');
   setOptions('billingFilter',meta?.billing_modes||[],'All billing modes');
   setOptions('providerFilter',meta?.providers||[],'All providers');
-  setNamedOptions('accountFilter',meta?.accounts||[],'All accounts');
-  setNamedOptions('agentFilter',meta?.agents||[],'All agents');
+  setMultiOptions('accountFilter',meta?.accounts||[],'All accounts',previous?.account||[]);
+  setMultiOptions('agentFilter',meta?.agents||[],'All agents',previous?.agent||[]);
   setOptions('modelFilter',meta?.models||[],'All models');
   setOptions('effortFilter',meta?.efforts||[],'All efforts');
-  setOptions('projectFilter',meta?.projects||[],'All projects');
+  setMultiOptions('projectFilter',meta?.projects||[],'All projects',previous?.project||[]);
   setOptions('targetModelFilter',meta?.target_models||[],'Choose target model');
   const from=$('fromDate'),to=$('toDate');
   from.min=meta?.data_min||'';from.max=meta?.data_max||'';to.min=meta?.data_min||'';to.max=meta?.data_max||'';
@@ -138,8 +211,7 @@ function initFilters(preserve=false){
     from.value=clampDate(previous.from||meta?.data_min||'');to.value=clampDate(previous.to||meta?.data_max||'');
     const restores={
       sourceFilter:previous.source,billingFilter:previous.billing,providerFilter:previous.provider,
-      accountFilter:previous.account,agentFilter:previous.agent,modelFilter:previous.model,
-      effortFilter:previous.effort,projectFilter:previous.project,targetModelFilter:previous.target_model
+      modelFilter:previous.model,effortFilter:previous.effort,targetModelFilter:previous.target_model
     };
     Object.entries(restores).forEach(([id,value])=>{
       if(value&&[...$(id).options].some(o=>o.value===value))$(id).value=value;
@@ -151,8 +223,10 @@ function initFilters(preserve=false){
   updateQuickButtons();updateRangeStatus();
 }
 
-async function loadMeta(preserve=false){
-  meta=await api('/api/meta');
+async function loadMeta(preserve=false,scopeDates=false){
+  const current=preserve?filters():null;
+  const dateQuery=scopeDates&&current?queryString({from:current.from,to:current.to}):'';
+  meta=await api('/api/meta'+(dateQuery?'?'+dateQuery:''));
   initFilters(preserve);
   $('refreshFrom').value=filters().from||meta?.data_min||'';
   $('refreshTo').value=filters().to||meta?.data_max||'';
