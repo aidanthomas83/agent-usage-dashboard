@@ -173,36 +173,48 @@ def agent_expr(alias: str = "") -> str:
     )
 
 
-def parse_filters(query: dict[str, list[str]]) -> dict[str, str]:
+def parse_filters(query: dict[str, list[str]]) -> dict[str, object]:
     def one(name: str) -> str:
         return (query.get(name) or [""])[0].strip()
 
-    result = {
+    def many(name: str) -> tuple[str, ...]:
+        return tuple(sorted({
+            value.strip()
+            for value in (query.get(name) or [])
+            if value and value.strip()
+        }))
+
+    result: dict[str, object] = {
         "from": one("from"),
         "to": one("to"),
         "source": one("source"),
         "billing": one("billing"),
         "provider": one("provider"),
-        "account": one("account"),
+        "account": many("account"),
         "model": one("model"),
-        "agent": one("agent"),
+        "agent": many("agent"),
         "effort": one("effort"),
-        "project": one("project"),
+        "project": many("project"),
         "target_model": one("target_model"),
     }
     for key in ("from", "to"):
-        if result[key]:
-            date.fromisoformat(result[key])
+        value = str(result[key] or "")
+        if value:
+            date.fromisoformat(value)
     return result
 
 
-def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[object]]:
-    """Filters for the retained Codex-specific tables.
+def selected_values(filters: dict[str, object], key: str) -> tuple[str, ...]:
+    value = filters.get(key)
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(item) for item in value if str(item))
+    if value:
+        return (str(value),)
+    return ()
 
-    Cross-provider filters deliberately collapse this query to no rows when the
-    selection cannot represent Codex Desktop. This prevents a Paperclip/Ollama
-    filter from silently showing unrelated Codex-only diagnostics.
-    """
+
+def where_for(filters: dict[str, object], alias: str = "") -> tuple[str, list[object]]:
+    """Filters for the retained Codex-specific tables."""
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
     values: list[object] = []
@@ -212,8 +224,11 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
         clauses.append("1=0")
     if filters.get("provider") and filters["provider"] != "openai":
         clauses.append("1=0")
-    if filters.get("account") and filters["account"] != "codex-desktop":
+
+    accounts = selected_values(filters, "account")
+    if accounts and "codex-desktop" not in accounts:
         clauses.append("1=0")
+
     if filters.get("from"):
         clauses.append(f"{p}date>=?")
         values.append(filters["from"])
@@ -223,39 +238,42 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
     if filters.get("model"):
         clauses.append(f"{p}model=?")
         values.append(filters["model"])
-    if filters.get("agent"):
-        agent = filters["agent"]
-        if agent == "codex:main":
-            role = "Main"
-        elif agent.startswith("codex:role:"):
-            role = agent.split(":", 2)[2]
-        else:
+
+    agents = selected_values(filters, "agent")
+    if agents:
+        roles: list[str] = []
+        for agent in agents:
+            if agent == "codex:main":
+                roles.append("Main")
+            elif agent.startswith("codex:role:"):
+                roles.append(agent.split(":", 2)[2])
+        if not roles:
             clauses.append("1=0")
-            role = ""
-        if role:
-            clauses.append(f"{agent_expr(alias)}=?")
-            values.append(role)
+        else:
+            placeholders = ",".join("?" for _ in roles)
+            clauses.append(f"{agent_expr(alias)} IN ({placeholders})")
+            values.extend(roles)
+
     if filters.get("effort"):
         clauses.append(f"{p}reasoning_effort=?")
         values.append(filters["effort"])
-    if filters.get("project"):
-        clauses.append(f"{p}project=?")
-        values.append(filters["project"])
+
+    projects = selected_values(filters, "project")
+    if projects:
+        placeholders = ",".join("?" for _ in projects)
+        clauses.append(f"{p}project IN ({placeholders})")
+        values.extend(projects)
+
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
 def normalized_where(
-    filters: dict[str, str],
+    filters: dict[str, object],
     alias: str = "",
     *,
     include_target: bool = False,
 ) -> tuple[str, list[object]]:
-    """Composable filters for usage_records/usage_runs.
-
-    Default all-source queries use only primary rows so an exact Paperclip ↔
-    Codex session overlap is not double-counted. Selecting an explicit source
-    exposes that source's own raw normalized view, including overlap rows.
-    """
+    """Composable filters for usage_records/usage_runs."""
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
     values: list[object] = []
@@ -267,24 +285,41 @@ def normalized_where(
     if filters.get("to"):
         clauses.append(f"{p}date<=?")
         values.append(filters["to"])
-    mapping = {
+
+    scalar_mapping = {
         "source": "source_system",
         "billing": "billing_mode",
         "provider": "provider",
-        "account": "account_connection_id",
         "model": "model",
-        "agent": "agent_id",
         "effort": "reasoning_effort",
+    }
+    for key, column in scalar_mapping.items():
+        if filters.get(key):
+            clauses.append(f"{p}{column}=?")
+            values.append(filters[key])
+
+    multi_mapping = {
+        "account": "account_connection_id",
+        "agent": "agent_id",
         "project": "project_name",
     }
-    for key, column in mapping.items():
-        if not filters.get(key):
+    for key, column in multi_mapping.items():
+        selected = selected_values(filters, key)
+        if not selected:
             continue
-        if key == "account" and filters[key] == "__unknown__":
-            clauses.append(f"COALESCE({p}{column},'')=''")
+        if key == "account" and "__unknown__" in selected:
+            known = [value for value in selected if value != "__unknown__"]
+            pieces = [f"COALESCE({p}{column},'')=''"]
+            if known:
+                placeholders = ",".join("?" for _ in known)
+                pieces.append(f"{p}{column} IN ({placeholders})")
+                values.extend(known)
+            clauses.append("(" + " OR ".join(pieces) + ")")
             continue
-        clauses.append(f"{p}{column}=?")
-        values.append(filters[key])
+        placeholders = ",".join("?" for _ in selected)
+        clauses.append(f"{p}{column} IN ({placeholders})")
+        values.extend(selected)
+
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
