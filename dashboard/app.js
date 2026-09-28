@@ -744,7 +744,7 @@ async function setQuickRange(days){
   try{await loadMeta(true,true);await loadDashboard(true);}
   finally{row?.classList.remove('filtering');}
 }
-function resetFilters(){activeQuickRange=0;initFilters(false);loadDashboard(true);}
+async function resetFilters(){activeQuickRange=0;await loadMeta(false,false);await loadDashboard(true);}
 
 function renderTip(raw){
   try{const data=JSON.parse(raw||'{}'),items=Array.isArray(data.items)?data.items:[];$('tooltip').innerHTML=`${data.title?`<div class="tip-title">${esc(data.title)}</div>`:''}${items.map(item=>`<div class="tip-row"><span class="tip-swatch" style="--tip-color:${escAttr(item.color||'var(--muted)')}"></span><span>${esc(item.label||'')}</span><span class="tip-value">${esc(item.value??'')}</span></div>`).join('')}`;return true;}catch{return false;}
@@ -831,7 +831,7 @@ function startRefreshPolling(initial){
       if(state.status!=='running'){
         clearInterval(refreshPoll);refreshPoll=null;
         if(state.status==='completed'){
-          clientCache.clear();dashboard=null;await loadMeta(true);await loadDashboard(false,true);
+          clientCache.clear();dashboard=null;await loadMeta(true,true);await loadDashboard(false,true);
           setTimeout(()=>{$('refreshBanner').classList.remove('show');},5000);
         }
       }
