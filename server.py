@@ -1126,6 +1126,26 @@ def meta_payload(
         codex_agents = distinct(
             f"SELECT DISTINCT {agent_expr()} AS role FROM responses ORDER BY role"
         )
+        fallback_project_clauses = ["project<>''"]
+        fallback_project_values: list[object] = []
+        if from_date:
+            date.fromisoformat(from_date)
+            fallback_project_clauses.append("date>=?")
+            fallback_project_values.append(from_date)
+        if to_date:
+            date.fromisoformat(to_date)
+            fallback_project_clauses.append("date<=?")
+            fallback_project_values.append(to_date)
+        fallback_projects = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT project FROM responses WHERE "
+                + " AND ".join(fallback_project_clauses)
+                + " ORDER BY project",
+                fallback_project_values,
+            ).fetchall()
+            if row[0] not in (None, "")
+        ]
         return {
             "ready": bool(minmax and minmax[2]),
             "data_min": minmax[0] if minmax else None,
@@ -1144,12 +1164,7 @@ def meta_payload(
                 for role in codex_agents
             ],
             "efforts": distinct("SELECT DISTINCT reasoning_effort FROM responses WHERE reasoning_effort<>'' ORDER BY reasoning_effort"),
-            "projects": distinct(
-                "SELECT DISTINCT project FROM responses WHERE project<>''"
-                + (" AND date>='" + from_date + "'" if from_date else "")
-                + (" AND date<='" + to_date + "'" if to_date else "")
-                + " ORDER BY project"
-            ),
+            "projects": fallback_projects,
             "target_models": sorted(str(model) for model in (load_pricing(data_dir).get("models") or {}).keys()),
             "source_status": [],
             "metadata": metadata,
