@@ -1801,7 +1801,7 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
         if conn is None:
             return {"ready": False, "tab": "workload"}
         try:
-            if not filters.get("agent"):
+            if not selected_values(filters, "agent"):
                 return {
                     "ready": True,
                     "tab": "workload",
@@ -1871,9 +1871,15 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                 conn, filters,
                 "COALESCE(NULLIF({a}.model,''),'Unknown')",
             )
-            agent_name = next(
-                (str(row.get("agent_name") or "") for row in rows if row.get("agent_name")),
-                filters.get("agent") or "Selected agent",
+            agent_names = sorted({
+                str(row.get("agent_name") or "")
+                for row in rows
+                if row.get("agent_name")
+            })
+            agent_name = (
+                ", ".join(agent_names)
+                if agent_names
+                else ", ".join(selected_values(filters, "agent)) or "Selected agents"
             )
 
             return {
@@ -1882,7 +1888,7 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                 "filters": filters,
                 "requires_agent": False,
                 "metadata": decode_metadata(conn),
-                "agent": {"id": filters.get("agent"), "name": agent_name},
+                "agent": {"id": list(selected_values(filters, "agent")), "name": agent_name},
                 "summary": {
                     "runs": len(rows),
                     "calendar_days": calendar_days,
