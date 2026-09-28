@@ -146,14 +146,16 @@ The global filter row supports:
 - source
 - billing mode
 - provider
-- account / subscription
-- agent
+- account / subscription (searchable multi-select)
+- agent (searchable multi-select)
 - model
 - reasoning effort
-- project
+- project (searchable multi-select, scoped to the selected date range)
 - target model on the Workload estimator tab
 
 Filters compose server-side in SQLite.
+
+Codex project identity prefers the Git repository name captured in rollout session metadata. When Git metadata is unavailable, the collector falls back to the session working-directory name. After upgrading from an older dashboard version, run one **Full rollout scan** to re-normalize historical project labels from Git metadata where available.
 
 ## Dashboard views
 
