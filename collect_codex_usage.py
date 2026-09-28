@@ -458,14 +458,31 @@ def dig_first(obj: Any, keys: set[str]) -> str:
     return ""
 
 
+def repository_name_from_url(value: Any) -> str:
+    """Return a stable repository name from Codex's sanitized Git remote URL."""
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return ""
+    tail = re.split(r"[:/]", text)[-1].strip()
+    return tail[:-4] if tail.lower().endswith(".git") else tail
+
+
 def normalize_session_meta(payload: dict[str, Any]) -> dict[str, str]:
     def s(key: str) -> str:
         value = payload.get(key)
         return "" if value is None or isinstance(value, (dict, list)) else str(value)
 
     cwd = s("cwd")
+    git = payload.get("git")
     project = ""
-    if cwd:
+    if isinstance(git, dict):
+        project = repository_name_from_url(
+            git.get("repository_url")
+            or git.get("repositoryUrl")
+            or git.get("origin_url")
+            or git.get("originUrl")
+        )
+    if not project and cwd:
         cleaned = cwd.rstrip("/\\")
         project = cleaned.replace("\\", "/").split("/")[-1]
 

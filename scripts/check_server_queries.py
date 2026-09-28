@@ -171,6 +171,29 @@ def main() -> int:
         assert configured_count == 2
         assert "idx_responses_dashboard" in indexes
         assert "idx_responses_date_session" in indexes
+        assert "idx_usage_records_project_date" in indexes
+        assert "idx_usage_records_account_date" in indexes
+        assert "idx_usage_runs_agent_date" in indexes
+
+        parsed_multi = server.parse_filters({
+            "account": ["codex-desktop", "local:ollama"],
+            "agent": ["codex:role:executor", "paperclip:atlas"],
+            "project": ["test-project", "other-project"],
+        })
+        assert parsed_multi["account"] == ("codex-desktop", "local:ollama"), parsed_multi
+        assert parsed_multi["agent"] == ("codex:role:executor", "paperclip:atlas"), parsed_multi
+        assert parsed_multi["project"] == ("other-project", "test-project"), parsed_multi
+        where_sql, where_values = server.normalized_where(parsed_multi, "u")
+        assert "account_connection_id IN (?,?)" in where_sql, where_sql
+        assert "agent_id IN (?,?)" in where_sql, where_sql
+        assert "project_name IN (?,?)" in where_sql, where_sql
+        assert len(where_values) == 6, where_values
+
+        git_meta = collector.normalize_session_meta({
+            "cwd": "C:\\temp\\answer-me-these-questions-on-this",
+            "git": {"repository_url": "https://github.com/aidanthomas83/agent-usage-dashboard.git"},
+        })
+        assert git_meta["project"] == "agent-usage-dashboard", git_meta
 
         filters = {
             "from": "2026-09-23", "to": "2026-09-23",

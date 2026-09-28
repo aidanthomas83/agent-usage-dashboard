@@ -38,11 +38,11 @@
         <div class="field"><label>Source</label><select id="sourceFilter"><option value="">All sources</option></select></div>
         <div class="field"><label>Billing mode</label><select id="billingFilter"><option value="">All billing modes</option></select></div>
         <div class="field"><label>Provider</label><select id="providerFilter"><option value="">All providers</option></select></div>
-        <div class="field"><label>Account / subscription</label><select id="accountFilter"><option value="">All accounts</option></select></div>
-        <div class="field"><label>Agent</label><select id="agentFilter"><option value="">All agents</option></select></div>
+        <div class="field"><label>Account / subscription</label><div id="accountFilter" class="multi-select" data-placeholder="All accounts"></div></div>
+        <div class="field"><label>Agent</label><div id="agentFilter" class="multi-select" data-placeholder="All agents"></div></div>
         <div class="field"><label>Model</label><select id="modelFilter"><option value="">All models</option></select></div>
         <div class="field"><label>Effort</label><select id="effortFilter"><option value="">All efforts</option></select></div>
-        <div class="field"><label>Project</label><select id="projectFilter"><option value="">All projects</option></select></div>
+        <div class="field"><label>Project</label><div id="projectFilter" class="multi-select" data-placeholder="All projects"></div></div>
         <div id="targetModelFilterWrap" class="field" hidden><label>Target model</label><select id="targetModelFilter"><option value="">Choose target model</option></select></div>
         <button id="resetBtn" type="button">Reset</button>
       </div>

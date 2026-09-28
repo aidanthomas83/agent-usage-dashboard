@@ -139,3 +139,23 @@
   .kpis.compact.usage-kpis,.kpis.subscription-kpis{grid-template-columns:1fr 1fr}
   .quota-grid{grid-template-columns:1fr}
 }
+
+
+/* Searchable multi-select filters */
+.multi-select{position:relative;min-width:0}
+.multi-select-button{width:100%;height:34px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);font:inherit;text-align:left}
+.multi-select-button:hover,.multi-select.open .multi-select-button{border-color:var(--blue)}
+.multi-select-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.multi-select-count{flex:none;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--blue) 12%,var(--panel));color:var(--blue);font-size:10px;font-weight:750}
+.multi-select-menu{position:absolute;z-index:70;top:calc(100% + 5px);left:0;width:max(100%,260px);max-width:360px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 14px 36px rgba(0,0,0,.18);display:none}
+.multi-select.open .multi-select-menu{display:block}
+.multi-select-toolbar{display:flex;gap:6px;margin-bottom:7px}
+.multi-select-toolbar button{height:28px;padding:0 9px;font-size:10px}
+.multi-select-search{width:100%;height:31px!important;margin-bottom:7px}
+.multi-select-options{max-height:260px;overflow:auto;border-top:1px solid var(--line);padding-top:5px}
+.multi-select-option{display:flex;align-items:center;gap:8px;padding:6px 5px;border-radius:6px;cursor:pointer;font-size:11px}
+.multi-select-option:hover{background:var(--panel2)}
+.multi-select-option input{width:auto;height:auto;margin:0}
+.multi-select-option span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filter-row.filtering{box-shadow:0 0 0 1px color-mix(in srgb,var(--blue) 30%,var(--line)),var(--shadow)}
+.filter-row.filtering:after{content:"Updating…";display:block;margin-top:8px;color:var(--blue);font-size:10px;font-weight:700}

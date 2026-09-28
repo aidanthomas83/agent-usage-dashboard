@@ -173,36 +173,48 @@ def agent_expr(alias: str = "") -> str:
     )
 
 
-def parse_filters(query: dict[str, list[str]]) -> dict[str, str]:
+def parse_filters(query: dict[str, list[str]]) -> dict[str, object]:
     def one(name: str) -> str:
         return (query.get(name) or [""])[0].strip()
 
-    result = {
+    def many(name: str) -> tuple[str, ...]:
+        return tuple(sorted({
+            value.strip()
+            for value in (query.get(name) or [])
+            if value and value.strip()
+        }))
+
+    result: dict[str, object] = {
         "from": one("from"),
         "to": one("to"),
         "source": one("source"),
         "billing": one("billing"),
         "provider": one("provider"),
-        "account": one("account"),
+        "account": many("account"),
         "model": one("model"),
-        "agent": one("agent"),
+        "agent": many("agent"),
         "effort": one("effort"),
-        "project": one("project"),
+        "project": many("project"),
         "target_model": one("target_model"),
     }
     for key in ("from", "to"):
-        if result[key]:
-            date.fromisoformat(result[key])
+        value = str(result[key] or "")
+        if value:
+            date.fromisoformat(value)
     return result
 
 
-def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[object]]:
-    """Filters for the retained Codex-specific tables.
+def selected_values(filters: dict[str, object], key: str) -> tuple[str, ...]:
+    value = filters.get(key)
+    if isinstance(value, (list, tuple, set)):
+        return tuple(str(item) for item in value if str(item))
+    if value:
+        return (str(value),)
+    return ()
 
-    Cross-provider filters deliberately collapse this query to no rows when the
-    selection cannot represent Codex Desktop. This prevents a Paperclip/Ollama
-    filter from silently showing unrelated Codex-only diagnostics.
-    """
+
+def where_for(filters: dict[str, object], alias: str = "") -> tuple[str, list[object]]:
+    """Filters for the retained Codex-specific tables."""
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
     values: list[object] = []
@@ -212,8 +224,11 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
         clauses.append("1=0")
     if filters.get("provider") and filters["provider"] != "openai":
         clauses.append("1=0")
-    if filters.get("account") and filters["account"] != "codex-desktop":
+
+    accounts = selected_values(filters, "account")
+    if accounts and "codex-desktop" not in accounts:
         clauses.append("1=0")
+
     if filters.get("from"):
         clauses.append(f"{p}date>=?")
         values.append(filters["from"])
@@ -223,39 +238,42 @@ def where_for(filters: dict[str, str], alias: str = "") -> tuple[str, list[objec
     if filters.get("model"):
         clauses.append(f"{p}model=?")
         values.append(filters["model"])
-    if filters.get("agent"):
-        agent = filters["agent"]
-        if agent == "codex:main":
-            role = "Main"
-        elif agent.startswith("codex:role:"):
-            role = agent.split(":", 2)[2]
-        else:
+
+    agents = selected_values(filters, "agent")
+    if agents:
+        roles: list[str] = []
+        for agent in agents:
+            if agent == "codex:main":
+                roles.append("Main")
+            elif agent.startswith("codex:role:"):
+                roles.append(agent.split(":", 2)[2])
+        if not roles:
             clauses.append("1=0")
-            role = ""
-        if role:
-            clauses.append(f"{agent_expr(alias)}=?")
-            values.append(role)
+        else:
+            placeholders = ",".join("?" for _ in roles)
+            clauses.append(f"{agent_expr(alias)} IN ({placeholders})")
+            values.extend(roles)
+
     if filters.get("effort"):
         clauses.append(f"{p}reasoning_effort=?")
         values.append(filters["effort"])
-    if filters.get("project"):
-        clauses.append(f"{p}project=?")
-        values.append(filters["project"])
+
+    projects = selected_values(filters, "project")
+    if projects:
+        placeholders = ",".join("?" for _ in projects)
+        clauses.append(f"{p}project IN ({placeholders})")
+        values.extend(projects)
+
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
 def normalized_where(
-    filters: dict[str, str],
+    filters: dict[str, object],
     alias: str = "",
     *,
     include_target: bool = False,
 ) -> tuple[str, list[object]]:
-    """Composable filters for usage_records/usage_runs.
-
-    Default all-source queries use only primary rows so an exact Paperclip ↔
-    Codex session overlap is not double-counted. Selecting an explicit source
-    exposes that source's own raw normalized view, including overlap rows.
-    """
+    """Composable filters for usage_records/usage_runs."""
     p = f"{alias}." if alias else ""
     clauses: list[str] = []
     values: list[object] = []
@@ -267,24 +285,41 @@ def normalized_where(
     if filters.get("to"):
         clauses.append(f"{p}date<=?")
         values.append(filters["to"])
-    mapping = {
+
+    scalar_mapping = {
         "source": "source_system",
         "billing": "billing_mode",
         "provider": "provider",
-        "account": "account_connection_id",
         "model": "model",
-        "agent": "agent_id",
         "effort": "reasoning_effort",
+    }
+    for key, column in scalar_mapping.items():
+        if filters.get(key):
+            clauses.append(f"{p}{column}=?")
+            values.append(filters[key])
+
+    multi_mapping = {
+        "account": "account_connection_id",
+        "agent": "agent_id",
         "project": "project_name",
     }
-    for key, column in mapping.items():
-        if not filters.get(key):
+    for key, column in multi_mapping.items():
+        selected = selected_values(filters, key)
+        if not selected:
             continue
-        if key == "account" and filters[key] == "__unknown__":
-            clauses.append(f"COALESCE({p}{column},'')=''")
+        if key == "account" and "__unknown__" in selected:
+            known = [value for value in selected if value != "__unknown__"]
+            pieces = [f"COALESCE({p}{column},'')=''"]
+            if known:
+                placeholders = ",".join("?" for _ in known)
+                pieces.append(f"{p}{column} IN ({placeholders})")
+                values.extend(known)
+            clauses.append("(" + " OR ".join(pieces) + ")")
             continue
-        clauses.append(f"{p}{column}=?")
-        values.append(filters[key])
+        placeholders = ",".join("?" for _ in selected)
+        clauses.append(f"{p}{column} IN ({placeholders})")
+        values.extend(selected)
+
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", values
 
 
@@ -929,7 +964,11 @@ def pricing_groups(
     return conn.execute(sql, values).fetchall()
 
 
-def meta_payload(data_dir: Path) -> dict[str, object]:
+def meta_payload(
+    data_dir: Path,
+    from_date: str = "",
+    to_date: str = "",
+) -> dict[str, object]:
     conn = open_db(data_dir)
     if conn is None:
         return {
@@ -1015,10 +1054,26 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
             efforts = distinct(
                 "SELECT DISTINCT reasoning_effort FROM usage_records WHERE reasoning_effort<>'' ORDER BY reasoning_effort"
             )
-            projects = distinct(
-                """SELECT DISTINCT project_name FROM usage_runs
-                    WHERE project_name<>'' ORDER BY project_name"""
-            )
+            project_clauses = ["project_name<>''"]
+            project_values: list[object] = []
+            if from_date:
+                date.fromisoformat(from_date)
+                project_clauses.append("date>=?")
+                project_values.append(from_date)
+            if to_date:
+                date.fromisoformat(to_date)
+                project_clauses.append("date<=?")
+                project_values.append(to_date)
+            projects = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT project_name FROM usage_runs WHERE "
+                    + " AND ".join(project_clauses)
+                    + " ORDER BY project_name",
+                    project_values,
+                ).fetchall()
+                if row[0] not in (None, "")
+            ]
             source_status = []
             if "source_status" in tables:
                 for row in conn.execute(
@@ -1071,6 +1126,26 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
         codex_agents = distinct(
             f"SELECT DISTINCT {agent_expr()} AS role FROM responses ORDER BY role"
         )
+        fallback_project_clauses = ["project<>''"]
+        fallback_project_values: list[object] = []
+        if from_date:
+            date.fromisoformat(from_date)
+            fallback_project_clauses.append("date>=?")
+            fallback_project_values.append(from_date)
+        if to_date:
+            date.fromisoformat(to_date)
+            fallback_project_clauses.append("date<=?")
+            fallback_project_values.append(to_date)
+        fallback_projects = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT project FROM responses WHERE "
+                + " AND ".join(fallback_project_clauses)
+                + " ORDER BY project",
+                fallback_project_values,
+            ).fetchall()
+            if row[0] not in (None, "")
+        ]
         return {
             "ready": bool(minmax and minmax[2]),
             "data_min": minmax[0] if minmax else None,
@@ -1089,7 +1164,7 @@ def meta_payload(data_dir: Path) -> dict[str, object]:
                 for role in codex_agents
             ],
             "efforts": distinct("SELECT DISTINCT reasoning_effort FROM responses WHERE reasoning_effort<>'' ORDER BY reasoning_effort"),
-            "projects": distinct("SELECT DISTINCT project FROM responses WHERE project<>'' ORDER BY project"),
+            "projects": fallback_projects,
             "target_models": sorted(str(model) for model in (load_pricing(data_dir).get("models") or {}).keys()),
             "source_status": [],
             "metadata": metadata,
@@ -1225,7 +1300,7 @@ def token_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
     return cached_payload(data_dir, "token", filters, ("normalized-v1",), build)
 
 
-def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
+def subscription_payload(data_dir: Path, filters: dict[str, object]) -> dict[str, object]:
     pricing = load_pricing(data_dir)
 
     def build():
@@ -1235,119 +1310,193 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
         try:
             record_where, record_values = normalized_where(filters, "r")
             run_where, run_values = normalized_where(filters, "u")
-            token_row = conn.execute(
-                f"""SELECT COALESCE(SUM(r.total_tokens),0) total_tokens,
-                           COUNT(*) usage_records
+            records = rows_as_dicts(conn.execute(
+                f"""SELECT r.date,r.model,r.agent_id,r.agent_name,
+                           r.account_connection_id,r.provider,r.billing_mode,
+                           r.input_tokens,r.cached_input_tokens,r.cache_write_input_tokens,
+                           r.output_tokens,r.total_tokens,r.token_metrics_available
                       FROM usage_records r{record_where}""",
                 record_values,
-            ).fetchone()
-            run_row = conn.execute(
-                f"""SELECT COUNT(*) runs,
-                           SUM(CASE WHEN u.billing_mode='subscription' THEN 1 ELSE 0 END) subscription_runs,
-                           SUM(CASE WHEN u.billing_mode='api' THEN 1 ELSE 0 END) api_runs,
-                           SUM(CASE WHEN u.billing_mode='local' THEN 1 ELSE 0 END) local_runs,
-                           SUM(CASE WHEN u.billing_mode='unknown' THEN 1 ELSE 0 END) unknown_runs,
-                           COALESCE(SUM(CASE WHEN u.actual_cost_available=1 THEN u.actual_provider_cost_usd ELSE 0 END),0) actual_provider_cost,
-                           SUM(CASE WHEN u.actual_cost_available=1 THEN 1 ELSE 0 END) actual_cost_runs
-                      FROM usage_runs u{run_where}""",
+            ).fetchall())
+            runs = rows_as_dicts(conn.execute(
+                f"""SELECT u.date,u.started_utc,u.finished_utc,u.duration_ms,
+                           u.agent_id,u.agent_name,u.account_connection_id,
+                           u.provider,u.billing_mode,u.actual_provider_cost_usd,
+                           u.actual_cost_available
+                      FROM usage_runs u{run_where}
+                     ORDER BY u.date,u.started_utc""",
                 run_values,
-            ).fetchone()
-            total_tokens = int(token_row["total_tokens"] or 0)
-            cost_rows = normalized_pricing_groups(conn, filters, [], pricing)
-            api_cost_total = sum(float(row.get("api_cost") or 0) for row in cost_rows)
-            priced_tokens = sum(int(row.get("priced_tokens") or 0) for row in cost_rows)
+            ).fetchall())
+
+            threshold = int(pricing.get("long_context_threshold") or LONG_CONTEXT_THRESHOLD)
+            account_names = current_account_names(conn)
+
+            def group_bucket(store: dict, key, **identity):
+                bucket = store.get(key)
+                if bucket is None:
+                    bucket = {
+                        **identity,
+                        "api_cost": 0.0,
+                        "total_tokens": 0,
+                        "priced_tokens": 0,
+                    }
+                    store[key] = bucket
+                return bucket
+
+            model_groups: dict[object, dict[str, object]] = {}
+            agent_groups: dict[object, dict[str, object]] = {}
+            account_groups: dict[object, dict[str, object]] = {}
+            provider_groups: dict[object, dict[str, object]] = {}
+            billing_groups: dict[object, dict[str, object]] = {}
+            daily_groups: dict[object, dict[str, object]] = {}
+            drill_groups: dict[object, dict[str, object]] = {}
+
+            total_tokens = 0
+            priced_tokens = 0
+            api_cost_total = 0.0
+
+            for row in records:
+                row_tokens = int(row.get("total_tokens") or 0)
+                total_tokens += row_tokens
+                if not int(row.get("token_metrics_available") or 0):
+                    continue
+
+                model = str(row.get("model") or "Unknown")
+                source_input = (
+                    int(row.get("input_tokens") or 0)
+                    + int(row.get("cached_input_tokens") or 0)
+                    + int(row.get("cache_write_input_tokens") or 0)
+                )
+                cost, priced = api_cost(
+                    model,
+                    float(row.get("input_tokens") or 0),
+                    float(row.get("cached_input_tokens") or 0),
+                    float(row.get("cache_write_input_tokens") or 0),
+                    float(row.get("output_tokens") or 0),
+                    source_input > threshold,
+                    pricing,
+                )
+                if priced:
+                    priced_tokens += row_tokens
+                    api_cost_total += cost
+
+                account_id = str(row.get("account_connection_id") or "__unknown__")
+                agent_id = str(row.get("agent_id") or "unknown")
+                agent_name = str(row.get("agent_name") or "Unknown agent")
+                provider = str(row.get("provider") or "unknown")
+                billing = str(row.get("billing_mode") or "unknown")
+                day = str(row.get("date") or "")
+
+                buckets = [
+                    group_bucket(model_groups, model, name=model),
+                    group_bucket(agent_groups, agent_id, id=agent_id, name=agent_name),
+                    group_bucket(account_groups, account_id, id=account_id),
+                    group_bucket(provider_groups, provider, name=provider),
+                    group_bucket(billing_groups, billing, name=billing),
+                    group_bucket(daily_groups, (day, model), date=day, model=model),
+                    group_bucket(
+                        drill_groups,
+                        (account_id, agent_id, model),
+                        account_id=account_id,
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        model_name=model,
+                    ),
+                ]
+                for bucket in buckets:
+                    bucket["total_tokens"] = int(bucket["total_tokens"]) + row_tokens
+                    if priced:
+                        bucket["api_cost"] = float(bucket["api_cost"]) + cost
+                        bucket["priced_tokens"] = int(bucket["priced_tokens"]) + row_tokens
+
+            for row in account_groups.values():
+                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
+            for row in drill_groups.values():
+                row["account_name"] = account_names.get(
+                    str(row.get("account_id") or "__unknown__"),
+                    "Unknown account",
+                )
+
+            actual_provider_cost = sum(
+                float(row.get("actual_provider_cost_usd") or 0)
+                for row in runs
+                if int(row.get("actual_cost_available") or 0)
+            )
+            actual_cost_runs = sum(
+                1 for row in runs if int(row.get("actual_cost_available") or 0)
+            )
+            billing_counts = {
+                mode: sum(1 for row in runs if str(row.get("billing_mode") or "unknown") == mode)
+                for mode in ("subscription", "api", "local", "unknown")
+            }
+
+            compute_ms = sum(int(row.get("duration_ms") or 0) for row in runs)
+            active_ms = merged_normalized_interval_ms(runs)
+            duration_covered = sum(1 for row in runs if int(row.get("duration_ms") or 0) > 0)
+            interval_covered = sum(
+                1 for row in runs
+                if str(row.get("started_utc") or "") and str(row.get("finished_utc") or "")
+            )
+
+            runtime_by_agent: dict[str, dict[str, object]] = {}
+            for row in runs:
+                agent_id = str(row.get("agent_id") or "unknown")
+                bucket = runtime_by_agent.setdefault(agent_id, {
+                    "id": agent_id,
+                    "name": str(row.get("agent_name") or "Unknown agent"),
+                    "agent_compute_ms": 0,
+                    "turns": 0,
+                    "_intervals": [],
+                })
+                bucket["agent_compute_ms"] = int(bucket["agent_compute_ms"]) + int(row.get("duration_ms") or 0)
+                bucket["turns"] = int(bucket["turns"]) + 1
+                bucket["_intervals"].append(row)
+
+            runtime_agents: list[dict[str, object]] = []
+            for agent_id, bucket in runtime_by_agent.items():
+                intervals = bucket.pop("_intervals")
+                agent_compute = int(bucket["agent_compute_ms"])
+                agent_active = merged_normalized_interval_ms(intervals)
+                cost = float(agent_groups.get(agent_id, {}).get("api_cost") or 0)
+                bucket.update({
+                    "active_wall_ms": agent_active,
+                    "parallelism_factor": agent_compute / agent_active if agent_active else 0.0,
+                    "api_cost": cost,
+                    "estimated_api_cost": cost,
+                    "cost_per_agent_hour": cost / (agent_compute / 3_600_000.0) if agent_compute else 0.0,
+                    "cost_per_active_hour": cost / (agent_active / 3_600_000.0) if agent_active else 0.0,
+                })
+                runtime_agents.append(bucket)
+            runtime_agents.sort(key=lambda row: int(row.get("agent_compute_ms") or 0), reverse=True)
+
+            run_count = len(runs)
             summary = {
                 "api_cost": api_cost_total,
                 "total_tokens": total_tokens,
                 "priced_tokens": priced_tokens,
                 "api_coverage_pct": priced_tokens / total_tokens * 100.0 if total_tokens else 0.0,
-                "actual_provider_cost": float(run_row["actual_provider_cost"] or 0),
-                "actual_cost_runs": int(run_row["actual_cost_runs"] or 0),
-                "runs": int(run_row["runs"] or 0),
-                "subscription_runs": int(run_row["subscription_runs"] or 0),
-                "api_runs": int(run_row["api_runs"] or 0),
-                "local_runs": int(run_row["local_runs"] or 0),
-                "unknown_runs": int(run_row["unknown_runs"] or 0),
+                "actual_provider_cost": actual_provider_cost,
+                "actual_cost_runs": actual_cost_runs,
+                "runs": run_count,
+                "subscription_runs": billing_counts["subscription"],
+                "api_runs": billing_counts["api"],
+                "local_runs": billing_counts["local"],
+                "unknown_runs": billing_counts["unknown"],
+                "actual_cost_coverage_pct": actual_cost_runs / run_count * 100.0 if run_count else 0.0,
             }
-            summary["actual_cost_coverage_pct"] = (
-                summary["actual_cost_runs"] / summary["runs"] * 100.0
-                if summary["runs"] else 0.0
-            )
-
-            daily_rows = normalized_pricing_groups(
-                conn, filters,
-                [("date", "r.date"), ("model_name", "COALESCE(NULLIF(r.model,''),'Unknown')")],
-                pricing,
-            )
-            daily_models = [
-                {
-                    "date": row["date"],
-                    "model": row["model_name"],
-                    "api_cost": row["api_cost"],
-                    "total_tokens": row["total_tokens"],
-                }
-                for row in daily_rows
-            ]
-
-            model_rows = normalized_pricing_groups(
-                conn, filters,
-                [("name", "COALESCE(NULLIF(r.model,''),'Unknown')")],
-                pricing,
-            )
-            agent_cost_rows = normalized_pricing_groups(
-                conn, filters,
-                [
-                    ("id", "COALESCE(NULLIF(r.agent_id,''),'unknown')"),
-                    ("name", "COALESCE(NULLIF(r.agent_name,''),'Unknown agent')"),
-                ],
-                pricing,
-            )
-            account_names = current_account_names(conn)
-            account_cost_rows = normalized_pricing_groups(
-                conn, filters,
-                [("id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')")],
-                pricing,
-            )
-            for row in account_cost_rows:
-                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
-            provider_cost_rows = normalized_pricing_groups(
-                conn, filters,
-                [("name", "COALESCE(NULLIF(r.provider,''),'unknown')")],
-                pricing,
-            )
-            billing_cost_rows = normalized_pricing_groups(
-                conn, filters,
-                [("name", "COALESCE(NULLIF(r.billing_mode,''),'unknown')")],
-                pricing,
-            )
-
-            runtime = normalized_runtime_breakdown(conn, filters, pricing)
-
-            account_usage = normalized_group_rows(
-                conn, filters,
-                "COALESCE(NULLIF({a}.account_connection_id,''),'__unknown__')",
-            )
-            for row in account_usage:
-                row["name"] = account_names.get(str(row.get("id") or "__unknown__"), "Unknown account")
-            cost_map = {
-                str(row.get("id") or ""): float(row.get("api_cost") or 0)
-                for row in account_cost_rows
+            runtime_summary = {
+                "agent_compute_ms": compute_ms,
+                "active_wall_ms": active_ms,
+                "parallelism_factor": compute_ms / active_ms if active_ms else 0.0,
+                "estimated_api_cost": api_cost_total,
+                "actual_provider_cost": actual_provider_cost,
+                "actual_cost_runs": actual_cost_runs,
+                "runs": run_count,
+                "duration_coverage_pct": duration_covered / run_count * 100.0 if run_count else 0.0,
+                "interval_coverage_pct": interval_covered / run_count * 100.0 if run_count else 0.0,
+                "cost_per_agent_hour": api_cost_total / (compute_ms / 3_600_000.0) if compute_ms else 0.0,
+                "cost_per_active_hour": api_cost_total / (active_ms / 3_600_000.0) if active_ms else 0.0,
             }
-            for row in account_usage:
-                row["api_cost"] = cost_map.get(str(row.get("id") or ""), 0.0)
-
-            account_drilldown = normalized_pricing_groups(
-                conn, filters,
-                [
-                    ("account_id", "COALESCE(NULLIF(r.account_connection_id,''),'__unknown__')"),
-                    ("agent_id", "COALESCE(NULLIF(r.agent_id,''),'unknown')"),
-                    ("agent_name", "COALESCE(NULLIF(r.agent_name,''),'Unknown agent')"),
-                    ("model_name", "COALESCE(NULLIF(r.model,''),'Unknown')"),
-                ],
-                pricing,
-            )
-            for row in account_drilldown:
-                row["account_name"] = account_names.get(str(row.get("account_id") or "__unknown__"), "Unknown account")
 
             quota_rows = []
             tables = {
@@ -1363,11 +1512,7 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                     (usage_model.SOURCE_PAPERCLIP,),
                 ).fetchall())
 
-            used_models = {
-                str(row.get("name") or "")
-                for row in model_rows
-                if row.get("name")
-            }
+            used_models = {str(row.get("name") or "") for row in model_groups.values() if row.get("name")}
             price_models = []
             aliases = pricing.get("aliases") or {}
             for model in sorted(used_models):
@@ -1389,15 +1534,15 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
                 "filters": filters,
                 "metadata": decode_metadata(conn),
                 "summary": summary,
-                "models": sorted(model_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "agents": sorted(agent_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "accounts": sorted(account_usage, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "providers": sorted(provider_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "billing_modes": sorted(billing_cost_rows, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "account_drilldown": sorted(account_drilldown, key=lambda row: float(row.get("api_cost") or 0), reverse=True),
-                "daily_models": daily_models,
-                "runtime_summary": runtime["summary"],
-                "runtime_agents": runtime["agents"],
+                "models": sorted(model_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "agents": sorted(agent_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "accounts": sorted(account_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "providers": sorted(provider_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "billing_modes": sorted(billing_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "account_drilldown": sorted(drill_groups.values(), key=lambda row: float(row.get("api_cost") or 0), reverse=True),
+                "daily_models": sorted(daily_groups.values(), key=lambda row: (str(row.get("date") or ""), str(row.get("model") or ""))),
+                "runtime_summary": runtime_summary,
+                "runtime_agents": runtime_agents,
                 "provider_quotas": quota_rows,
                 "pricing": {
                     "source_url": pricing.get("source_url"),
@@ -1419,7 +1564,7 @@ def subscription_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, o
         finally:
             conn.close()
 
-    return cached_payload(data_dir, "subscription", filters, ("normalized-v1",), build)
+    return cached_payload(data_dir, "subscription", filters, ("normalized-v2-fast",), build)
 
 
 def insights_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, object]:
@@ -1671,7 +1816,7 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
         if conn is None:
             return {"ready": False, "tab": "workload"}
         try:
-            if not filters.get("agent"):
+            if not selected_values(filters, "agent"):
                 return {
                     "ready": True,
                     "tab": "workload",
@@ -1741,9 +1886,15 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                 conn, filters,
                 "COALESCE(NULLIF({a}.model,''),'Unknown')",
             )
-            agent_name = next(
-                (str(row.get("agent_name") or "") for row in rows if row.get("agent_name")),
-                filters.get("agent") or "Selected agent",
+            agent_names = sorted({
+                str(row.get("agent_name") or "")
+                for row in rows
+                if row.get("agent_name")
+            })
+            agent_name = (
+                ", ".join(agent_names)
+                if agent_names
+                else ", ".join(selected_values(filters, "agent")) or "Selected agents"
             )
 
             return {
@@ -1752,7 +1903,7 @@ def workload_payload(data_dir: Path, filters: dict[str, str]) -> dict[str, objec
                 "filters": filters,
                 "requires_agent": False,
                 "metadata": decode_metadata(conn),
-                "agent": {"id": filters.get("agent"), "name": agent_name},
+                "agent": {"id": list(selected_values(filters, "agent")), "name": agent_name},
                 "summary": {
                     "runs": len(rows),
                     "calendar_days": calendar_days,
@@ -2071,7 +2222,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/meta":
-            self.send_json(meta_payload(self.app_server.data_dir))
+            try:
+                query = parse_qs(parsed.query)
+                from_date = (query.get("from") or [""])[0].strip()
+                to_date = (query.get("to") or [""])[0].strip()
+                self.send_json(meta_payload(self.app_server.data_dir, from_date, to_date))
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/api/dashboard":
             try:
