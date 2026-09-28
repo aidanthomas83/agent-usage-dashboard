@@ -144,6 +144,13 @@ def ensure_schema(conn_or_path: sqlite3.Connection | Path | str) -> None:
             ("idx_usage_records_model", "usage_records", "model"),
             ("idx_usage_records_primary", "usage_records", "is_primary,date"),
             ("idx_usage_records_session", "usage_records", "session_id"),
+            ("idx_usage_records_filter_date", "usage_records", "is_primary,date"),
+            ("idx_usage_records_account_date", "usage_records", "account_connection_id,is_primary,date"),
+            ("idx_usage_records_agent_date", "usage_records", "agent_id,is_primary,date"),
+            ("idx_usage_records_project_date", "usage_records", "project_name,is_primary,date"),
+            ("idx_usage_records_effort_date", "usage_records", "reasoning_effort,is_primary,date"),
+            ("idx_usage_records_billing_date", "usage_records", "billing_mode,is_primary,date"),
+            ("idx_usage_records_provider_date", "usage_records", "provider,is_primary,date"),
             ("idx_usage_runs_date", "usage_runs", "date"),
             ("idx_usage_runs_source", "usage_runs", "source_system"),
             ("idx_usage_runs_provider", "usage_runs", "provider"),
@@ -153,6 +160,13 @@ def ensure_schema(conn_or_path: sqlite3.Connection | Path | str) -> None:
             ("idx_usage_runs_model", "usage_runs", "model"),
             ("idx_usage_runs_primary", "usage_runs", "is_primary,date"),
             ("idx_usage_runs_session", "usage_runs", "session_id"),
+            ("idx_usage_runs_filter_date", "usage_runs", "is_primary,date"),
+            ("idx_usage_runs_account_date", "usage_runs", "account_connection_id,is_primary,date"),
+            ("idx_usage_runs_agent_date", "usage_runs", "agent_id,is_primary,date"),
+            ("idx_usage_runs_project_date", "usage_runs", "project_name,is_primary,date"),
+            ("idx_usage_runs_effort_date", "usage_runs", "reasoning_effort,is_primary,date"),
+            ("idx_usage_runs_billing_date", "usage_runs", "billing_mode,is_primary,date"),
+            ("idx_usage_runs_provider_date", "usage_runs", "provider,is_primary,date"),
         ]
         for name, table, cols in indexes:
             conn.execute(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})')
